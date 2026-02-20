@@ -20,6 +20,15 @@ export default defineConfig(({ mode }) => {
   return {
   plugins: [
     react(),
+    // Strip crossorigin attribute from built HTML — Tauri's asset server
+    // at https://tauri.localhost may not send CORS headers, causing
+    // module scripts to fail silently in WebView2 on Windows.
+    mode === 'tauri' && {
+      name: 'strip-crossorigin',
+      transformIndexHtml(html) {
+        return html.replace(/ crossorigin/g, '')
+      },
+    },
     // Sentry source map upload (only when auth token is configured)
     env.SENTRY_AUTH_TOKEN && sentryVitePlugin({
       org: env.SENTRY_ORG,

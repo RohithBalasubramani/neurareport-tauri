@@ -15,17 +15,31 @@ export const isTauri = () =>
 // Cache so we only invoke once
 let _backendUrl = null
 
+/** Race a promise against a timeout */
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`Tauri IPC timed out after ${ms}ms`)), ms)
+    ),
+  ])
+}
+
 /**
  * Get the backend URL from the Tauri Rust layer.
  * Returns null in non-Tauri environments.
+ * Times out after 5 seconds to prevent the app from hanging.
  */
 export async function getTauriBackendUrl() {
   if (!isTauri()) return null
   if (_backendUrl) return _backendUrl
 
   try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    _backendUrl = await invoke('get_backend_url')
+    const { invoke } = await withTimeout(
+      import('@tauri-apps/api/core'),
+      5000,
+    )
+    _backendUrl = await withTimeout(invoke('get_backend_url'), 5000)
     return _backendUrl
   } catch (e) {
     console.warn('[tauri] Failed to get backend URL:', e)

@@ -6,19 +6,33 @@ import './index.css'
 import App from './App.jsx'
 import { installGlobalFrontendErrorHandlers } from '@/api/frontendErrorLogger'
 import { initApiForTauri } from '@/api/client'
+import { isTauri } from '@/utils/tauri'
 
 installGlobalFrontendErrorHandlers()
 
+// Debug helper: write status to a visible element so we can see where it stalls
+function setStatus(msg) {
+  console.log('[main]', msg)
+  const el = document.getElementById('boot-status')
+  if (el) el.textContent = msg
+}
+
 function renderApp() {
-  createRoot(document.getElementById('root'), {
-    onUncaughtError: Sentry.reactErrorHandler(),
-    onCaughtError: Sentry.reactErrorHandler(),
-    onRecoverableError: Sentry.reactErrorHandler(),
-  }).render(
-    <StrictMode>
-      <App />
-    </StrictMode>,
-  )
+  setStatus('Mounting React...')
+  try {
+    createRoot(document.getElementById('root'), {
+      onUncaughtError: Sentry.reactErrorHandler(),
+      onCaughtError: Sentry.reactErrorHandler(),
+      onRecoverableError: Sentry.reactErrorHandler(),
+    }).render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    )
+  } catch (err) {
+    console.error('[main] React render threw:', err)
+    renderError(err)
+  }
 }
 
 function renderError(err) {
@@ -29,16 +43,25 @@ function renderError(err) {
       <pre style="background:#f5f5f5;padding:16px;border-radius:8px;overflow:auto;font-size:13px">${
         err?.stack || err?.message || String(err)
       }</pre>
-      <p style="color:#666;margin-top:16px">Check the log file at:<br/>
-        <code>%APPDATA%/com.neurareport.desktop/neurareport.log</code></p>
+      <p style="color:#666;margin-top:16px">
+        Environment: ${isTauri() ? 'Tauri desktop' : 'Browser'}<br/>
+        URL: ${window.location.href}<br/>
+        Check the log file at:<br/>
+        <code>%APPDATA%/com.neurareport.desktop/neurareport.log</code>
+      </p>
     </div>
   `
 }
 
 // In Tauri desktop mode, discover the backend port before rendering.
 // In web mode this resolves immediately (no-op).
+setStatus(isTauri() ? 'Discovering backend port...' : 'Starting...')
+
 initApiForTauri()
-  .then(() => renderApp())
+  .then(() => {
+    setStatus('Backend discovered, rendering...')
+    renderApp()
+  })
   .catch((err) => {
     console.error('[main] Failed to initialize:', err)
     renderError(err)

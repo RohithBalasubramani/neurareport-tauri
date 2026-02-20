@@ -7,6 +7,37 @@
     <title>NeuraReport</title>
   </head>
   <body>
+    <!-- DEBUG BANNER: outside #root so React can never touch it -->
+    <div id="debug-banner" style="position:fixed;bottom:0;left:0;right:0;z-index:999999;background:#1a1a2e;color:#0f0;font-family:monospace;font-size:11px;padding:4px 8px;max-height:15vh;overflow-y:auto;opacity:0.85">
+      [boot] HTML loaded. Waiting for JS...
+    </div>
+
+    <script>
+      // Global error catcher — runs BEFORE any module scripts
+      window.__DEBUG = [];
+      function dbg(msg) {
+        window.__DEBUG.push(msg);
+        var el = document.getElementById('debug-banner');
+        if (el) el.innerHTML = window.__DEBUG.map(function(m){ return '[debug] ' + m }).join('<br>');
+        console.log('[debug]', msg);
+      }
+      window.dbg = dbg;
+
+      window.onerror = function(msg, src, line, col, err) {
+        dbg('UNCAUGHT ERROR: ' + msg + ' at ' + (src||'?') + ':' + line + ':' + col);
+        return false;
+      };
+      window.addEventListener('unhandledrejection', function(e) {
+        dbg('UNHANDLED PROMISE: ' + (e.reason && e.reason.stack || e.reason || e));
+      });
+
+      dbg('Global handlers installed');
+      dbg('URL: ' + location.href);
+      dbg('UA: ' + navigator.userAgent.substring(0, 80));
+      dbg('__TAURI__: ' + (typeof window.__TAURI__));
+      dbg('__TAURI_INTERNALS__: ' + (typeof window.__TAURI_INTERNALS__));
+    </script>
+
     <div id="root"><div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#666"><div style="font-size:24px;font-weight:bold;margin-bottom:8px">Loading NeuraReport...</div><div id="boot-status" style="font-size:14px;color:#999"></div></div></div>
     <script type="module" src="/src/app/main.jsx"></script>
   </body>

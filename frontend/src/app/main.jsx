@@ -8,22 +8,48 @@ import { installGlobalFrontendErrorHandlers } from '@/api/frontendErrorLogger'
 import { initApiForTauri } from '@/api/client'
 import { isTauri } from '@/utils/tauri'
 
+// Write to the persistent debug banner (outside #root, React can't touch it)
+const dbg = window.dbg || ((msg) => console.log('[main]', msg))
+
+dbg('main.jsx module loaded')
+dbg('isTauri: ' + isTauri())
+
 installGlobalFrontendErrorHandlers()
+dbg('Error handlers installed')
 
 function renderApp() {
-  const root = document.getElementById('root')
-  createRoot(root, {
-    onUncaughtError: Sentry.reactErrorHandler(),
-    onCaughtError: Sentry.reactErrorHandler(),
-    onRecoverableError: Sentry.reactErrorHandler(),
-  }).render(
-    <StrictMode>
-      <App />
-    </StrictMode>,
-  )
+  dbg('renderApp() called — mounting React on #root')
+  try {
+    const root = document.getElementById('root')
+    dbg('#root found: ' + !!root + ', innerHTML length: ' + (root?.innerHTML?.length || 0))
+
+    createRoot(root, {
+      onUncaughtError: (err) => {
+        dbg('React onUncaughtError: ' + (err?.message || err))
+        Sentry.reactErrorHandler()(err)
+      },
+      onCaughtError: (err) => {
+        dbg('React onCaughtError: ' + (err?.message || err))
+        Sentry.reactErrorHandler()(err)
+      },
+      onRecoverableError: (err) => {
+        dbg('React onRecoverableError: ' + (err?.message || err))
+        Sentry.reactErrorHandler()(err)
+      },
+    }).render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    )
+    dbg('React render() called — waiting for first paint')
+  } catch (err) {
+    dbg('RENDER THREW: ' + (err?.stack || err?.message || err))
+    renderError(err)
+  }
 }
 
 function renderError(err) {
+  dbg('renderError: ' + (err?.message || err))
   const root = document.getElementById('root')
   root.innerHTML = `
     <div style="padding:40px;font-family:system-ui;color:#333;max-width:600px;margin:0 auto">
@@ -42,6 +68,14 @@ function renderError(err) {
 }
 
 // In Tauri desktop mode, discover the backend port before rendering.
+dbg('Calling initApiForTauri()...')
+
 initApiForTauri()
-  .then(() => renderApp())
-  .catch((err) => renderError(err))
+  .then(() => {
+    dbg('initApiForTauri resolved — calling renderApp()')
+    renderApp()
+  })
+  .catch((err) => {
+    dbg('initApiForTauri REJECTED: ' + (err?.stack || err?.message || err))
+    renderError(err)
+  })

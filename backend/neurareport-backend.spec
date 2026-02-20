@@ -109,6 +109,23 @@ hidden_imports = [
 # --- Data files needed at runtime ---
 datas = []
 
+# JSON schemas loaded at module level by validation.py
+schemas_dir = backend_dir / 'app' / 'schemas'
+if schemas_dir.exists():
+    datas.append((str(schemas_dir), 'backend/app/schemas'))
+
+# JSON schemas used by validation helpers
+json_schemas_dir = backend_dir / 'app' / 'services' / 'utils' / 'json_schemas'
+if json_schemas_dir.exists():
+    datas.append((str(json_schemas_dir), 'backend/app/services/utils/json_schemas'))
+
+# RBAC model and policy files (casbin)
+rbac_dir = backend_dir / 'app' / 'services' / 'rbac'
+for rbac_file in ['model.conf', 'policy.csv']:
+    rbac_path = rbac_dir / rbac_file
+    if rbac_path.exists():
+        datas.append((str(rbac_path), 'backend/app/services/rbac'))
+
 # Prompt YAML templates
 prompts_dir = backend_dir / 'app' / 'services' / 'prompts' / 'registry'
 if prompts_dir.exists():

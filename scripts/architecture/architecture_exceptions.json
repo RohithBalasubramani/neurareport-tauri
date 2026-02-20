@@ -1,0 +1,33 @@
+{
+  "exceptions": [
+    {
+      "id": "ARCH-EXC-001",
+      "date": "2026-01-23",
+      "rule_id": "APP-IMPORT-ENGINE",
+      "path": "backend/app/api/routes/legacy.py",
+      "imports": [
+        "backend.engine"
+      ]
+    },
+    {
+      "id": "ARCH-EXC-002",
+      "date": "2026-01-23",
+      "rule_id": "APP-API-IMPORT-SCOPE",
+      "path": "backend/api.py",
+      "imports": [
+        "backend.app.api"
+      ]
+    },
+    {
+      "id": "ARCH-EXC-003",
+      "date": "2026-01-23",
+      "rule_id": "APP-API-IMPORT-SCOPE",
+      "path": "backend/legacy/endpoints/feature_routes.py",
+      "imports": [
+        "backend.app.api.generate.chart_suggest_routes",
+        "backend.app.api.generate.discover_routes",
+        "backend.app.api.generate.saved_charts_routes"
+      ]
+    }
+  ]
+}

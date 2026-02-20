@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import ReportsPageContainer from '@/features/reports/containers/ReportsPageContainer'
+
+export default function ReportsPage() {
+  useInteraction()
+  return <ReportsPageContainer />
+}

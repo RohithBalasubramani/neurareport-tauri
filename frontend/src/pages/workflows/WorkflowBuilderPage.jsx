@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import WorkflowBuilderPageContainer from '@/features/workflows/containers/WorkflowBuilderPageContainer'
+
+export default function WorkflowBuilderPage() {
+  useInteraction()
+  return <WorkflowBuilderPageContainer />
+}

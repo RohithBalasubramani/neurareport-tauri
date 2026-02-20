@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import DashboardPageContainer from '@/features/dashboard/containers/DashboardPageContainer'
+
+export default function DashboardPage() {
+  useInteraction()
+  return <DashboardPageContainer />
+}

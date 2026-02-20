@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import JobsPageContainer from '@/features/jobs/containers/JobsPageContainer'
+
+export default function JobsPage() {
+  useInteraction()
+  return <JobsPageContainer />
+}

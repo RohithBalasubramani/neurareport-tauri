@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import DocumentQAPageContainer from '@/features/docqa/containers/DocumentQAPageContainer'
+
+export default function DocumentQAPage() {
+  useInteraction()
+  return <DocumentQAPageContainer />
+}

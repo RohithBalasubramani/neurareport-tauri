@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import SpreadsheetEditorPageContainer from '@/features/spreadsheets/containers/SpreadsheetEditorPageContainer'
+
+export default function SpreadsheetEditorPage() {
+  useInteraction()
+  return <SpreadsheetEditorPageContainer />
+}

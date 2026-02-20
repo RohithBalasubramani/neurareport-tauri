@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import SetupWizardContainer from '@/features/setup/containers/SetupWizardContainer'
+
+export default function SetupWizard() {
+  useInteraction()
+  return <SetupWizardContainer />
+}

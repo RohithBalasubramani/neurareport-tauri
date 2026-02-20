@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import SettingsPageContainer from '@/features/settings/containers/SettingsPageContainer'
+
+export default function SettingsPage() {
+  useInteraction()
+  return <SettingsPageContainer />
+}

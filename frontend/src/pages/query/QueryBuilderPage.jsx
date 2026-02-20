@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import QueryBuilderPageContainer from '@/features/query/containers/QueryBuilderPageContainer'
+
+export default function QueryBuilderPage() {
+  useInteraction()
+  return <QueryBuilderPageContainer />
+}

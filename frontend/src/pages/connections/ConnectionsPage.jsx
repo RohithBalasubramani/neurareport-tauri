@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import ConnectionsPageContainer from '@/features/connections/containers/ConnectionsPageContainer'
+
+export default function ConnectionsPage() {
+  useInteraction()
+  return <ConnectionsPageContainer />
+}

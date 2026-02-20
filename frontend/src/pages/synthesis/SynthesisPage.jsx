@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import SynthesisPageContainer from '@/features/synthesis/containers/SynthesisPageContainer'
+
+export default function SynthesisPage() {
+  useInteraction()
+  return <SynthesisPageContainer />
+}

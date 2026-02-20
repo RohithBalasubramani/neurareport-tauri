@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import SchedulesPageContainer from '@/features/schedules/containers/SchedulesPageContainer'
+
+export default function SchedulesPage() {
+  useInteraction()
+  return <SchedulesPageContainer />
+}

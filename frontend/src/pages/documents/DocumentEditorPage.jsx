@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import DocumentEditorPageContainer from '@/features/documents/containers/DocumentEditorPageContainer'
+
+export default function DocumentEditorPage() {
+  useInteraction()
+  return <DocumentEditorPageContainer />
+}

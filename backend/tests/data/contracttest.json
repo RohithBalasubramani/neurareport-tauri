@@ -1,0 +1,125 @@
+{
+  "tokens": {
+    "scalars": [
+      "plant_name",
+      "from_date",
+      "to_date",
+      "report_title"
+    ],
+    "row_tokens": [
+      "row_sl_no",
+      "row_item",
+      "row_qty",
+      "row_amount"
+    ],
+    "totals": [
+      "total_qty",
+      "total_amount"
+    ]
+  },
+  "mapping": {
+    "plant_name": "PARAM:plant_name",
+    "from_date": "PARAM:from_date",
+    "to_date": "PARAM:to_date",
+    "report_title": "'Monthly Order Summary'",
+    "row_sl_no": "ROW_NUMBER() OVER (ORDER BY order_items.item_name ASC)",
+    "row_item": "order_items.item_name",
+    "row_qty": "order_items.quantity",
+    "row_amount": "order_items.quantity * order_items.unit_price",
+    "total_qty": "SUM(rows.row_qty)",
+    "total_amount": "SUM(rows.row_amount)"
+  },
+  "unresolved": [],
+  "join": {
+    "parent_table": "orders",
+    "parent_key": "order_id",
+    "child_table": "order_items",
+    "child_key": "order_id"
+  },
+  "date_columns": {
+    "orders": "order_date",
+    "order_items": "created_at"
+  },
+  "filters": {
+    "optional": {
+      "order_number": "orders.order_number"
+    }
+  },
+  "reshape_rules": [
+    {
+      "purpose": "rows dataset",
+      "strategy": "NONE",
+      "explain": "Use order_items rows directly without pivoting.",
+      "columns": [
+        {
+          "as": "item_name",
+          "from": [
+            "order_items.item_name"
+          ]
+        },
+        {
+          "as": "quantity",
+          "from": [
+            "order_items.quantity"
+          ]
+        },
+        {
+          "as": "unit_price",
+          "from": [
+            "order_items.unit_price"
+          ]
+        }
+      ]
+    }
+  ],
+  "row_computed": {
+    "row_amount": "order_items.quantity * order_items.unit_price"
+  },
+  "totals_math": {
+    "total_qty": "SUM(rows.row_qty)",
+    "total_amount": "SUM(rows.row_amount)"
+  },
+  "formatters": {
+    "row_amount": "currency(2)",
+    "total_amount": "currency(2)"
+  },
+  "order_by": {
+    "rows": [
+      "order_items.item_name ASC"
+    ]
+  },
+  "notes": "SQLite dialect. Aggregates order_items by order with optional order_number filter.",
+  "header_tokens": [
+    "plant_name",
+    "from_date",
+    "to_date",
+    "report_title"
+  ],
+  "row_tokens": [
+    "row_sl_no",
+    "row_item",
+    "row_qty",
+    "row_amount"
+  ],
+  "totals": {
+    "total_qty": "SUM(rows.row_qty)",
+    "total_amount": "SUM(rows.row_amount)"
+  },
+  "row_order": [
+    "order_items.item_name ASC"
+  ],
+  "literals": {},
+  "warnings": [],
+  "assumptions": [
+    "Unit price is stored in order_items.unit_price."
+  ],
+  "validation": {
+    "unknown_tokens": [],
+    "unknown_columns": [],
+    "token_coverage": {
+      "scalars_mapped_pct": 100,
+      "row_tokens_mapped_pct": 100,
+      "totals_mapped_pct": 100
+    }
+  }
+}

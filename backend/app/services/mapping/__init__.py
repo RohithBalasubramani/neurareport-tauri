@@ -1,0 +1,1 @@
+"""Mapping assistant placeholder."""

@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import SchemaBuilderPageContainer from '@/features/federation/containers/SchemaBuilderPageContainer'
+
+export default function SchemaBuilderPage() {
+  useInteraction()
+  return <SchemaBuilderPageContainer />
+}

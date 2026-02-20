@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import UsageStatsPageContainer from '@/features/stats/containers/UsageStatsPageContainer'
+
+export default function UsageStatsPage() {
+  useInteraction()
+  return <UsageStatsPageContainer />
+}

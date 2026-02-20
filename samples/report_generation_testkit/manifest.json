@@ -1,0 +1,163 @@
+{
+  "created_at": "2026-02-16T05:42:57+00:00",
+  "project_root": "/home/rohith/desktop/NeuraReport",
+  "output_root": "/home/rohith/desktop/NeuraReport/samples/report_generation_testkit",
+  "registered_connections": true,
+  "fixtures": [
+    {
+      "id": "01_onlineinvoices_sample_invoice",
+      "report_type": "Invoice Template",
+      "pdf": {
+        "path": "samples/report_generation_testkit/pdf_reports/01_onlineinvoices_sample_invoice.pdf",
+        "source_url": "https://create.onlineinvoices.com/img/uploads/business-template-files/Sample%20Invoice%20Template%20-%20Sheet1.pdf",
+        "size_bytes": 109771
+      },
+      "database": {
+        "path": "samples/report_generation_testkit/databases/01_onlineinvoices_sample_invoice.sqlite3",
+        "size_bytes": 40960,
+        "kind": "invoice",
+        "tables": [
+          "customers",
+          "invoices",
+          "invoice_items",
+          "payments"
+        ],
+        "row_counts": {
+          "customers": 10,
+          "invoices": 20,
+          "invoice_items": 76,
+          "payments": 15
+        }
+      },
+      "connection": {
+        "id": "fixture-01_onlineinvoices_sample_invoice",
+        "name": "Fixture 01 - OnlineInvoices Sample Invoice",
+        "registered": true
+      }
+    },
+    {
+      "id": "02_zoho_standard_invoice",
+      "report_type": "Invoice Template",
+      "pdf": {
+        "path": "samples/report_generation_testkit/pdf_reports/02_zoho_standard_invoice.pdf",
+        "source_url": "https://www.zoho.com/invoice/invoice-templates/sample/zoho-invoice-standard-template.pdf",
+        "size_bytes": 34409
+      },
+      "database": {
+        "path": "samples/report_generation_testkit/databases/02_zoho_standard_invoice.sqlite3",
+        "size_bytes": 40960,
+        "kind": "invoice",
+        "tables": [
+          "customers",
+          "invoices",
+          "invoice_items",
+          "payments"
+        ],
+        "row_counts": {
+          "customers": 10,
+          "invoices": 20,
+          "invoice_items": 78,
+          "payments": 15
+        }
+      },
+      "connection": {
+        "id": "fixture-02_zoho_standard_invoice",
+        "name": "Fixture 02 - Zoho Standard Invoice",
+        "registered": true
+      }
+    },
+    {
+      "id": "03_smartsheet_basic_invoice",
+      "report_type": "Invoice Template",
+      "pdf": {
+        "path": "samples/report_generation_testkit/pdf_reports/03_smartsheet_basic_invoice.pdf",
+        "source_url": "https://www.smartsheet.com/sites/default/files/2020-03/IC-Basic-Invoice-Template-10768_PDF.pdf",
+        "size_bytes": 100040
+      },
+      "database": {
+        "path": "samples/report_generation_testkit/databases/03_smartsheet_basic_invoice.sqlite3",
+        "size_bytes": 40960,
+        "kind": "invoice",
+        "tables": [
+          "customers",
+          "invoices",
+          "invoice_items",
+          "payments"
+        ],
+        "row_counts": {
+          "customers": 10,
+          "invoices": 20,
+          "invoice_items": 81,
+          "payments": 15
+        }
+      },
+      "connection": {
+        "id": "fixture-03_smartsheet_basic_invoice",
+        "name": "Fixture 03 - Smartsheet Basic Invoice",
+        "registered": true
+      }
+    },
+    {
+      "id": "04_invoicesimple_pdf_template",
+      "report_type": "Invoice Template",
+      "pdf": {
+        "path": "samples/report_generation_testkit/pdf_reports/04_invoicesimple_pdf_template.pdf",
+        "source_url": "https://www.invoicesimple.com/wp-content/uploads/2022/12/InvoiceSimple-PDF-Template.pdf",
+        "size_bytes": 62037
+      },
+      "database": {
+        "path": "samples/report_generation_testkit/databases/04_invoicesimple_pdf_template.sqlite3",
+        "size_bytes": 40960,
+        "kind": "invoice",
+        "tables": [
+          "customers",
+          "invoices",
+          "invoice_items",
+          "payments"
+        ],
+        "row_counts": {
+          "customers": 10,
+          "invoices": 20,
+          "invoice_items": 69,
+          "payments": 15
+        }
+      },
+      "connection": {
+        "id": "fixture-04_invoicesimple_pdf_template",
+        "name": "Fixture 04 - InvoiceSimple PDF Template",
+        "registered": true
+      }
+    },
+    {
+      "id": "05_intuit_property_management_invoice",
+      "report_type": "Invoice Template",
+      "pdf": {
+        "path": "samples/report_generation_testkit/pdf_reports/05_intuit_property_management_invoice.pdf",
+        "source_url": "https://digitalasset.intuit.com/render/content/dam/intuit/sbseg/en_us/quickbooks-online/web/content/editable-PDF-property-management-invoice-template.pdf",
+        "size_bytes": 96224
+      },
+      "database": {
+        "path": "samples/report_generation_testkit/databases/05_intuit_property_management_invoice.sqlite3",
+        "size_bytes": 40960,
+        "kind": "invoice",
+        "tables": [
+          "customers",
+          "invoices",
+          "invoice_items",
+          "payments"
+        ],
+        "row_counts": {
+          "customers": 10,
+          "invoices": 20,
+          "invoice_items": 71,
+          "payments": 15
+        }
+      },
+      "connection": {
+        "id": "fixture-05_intuit_property_management_invoice",
+        "name": "Fixture 05 - Intuit Property Management Invoice",
+        "registered": true
+      }
+    }
+  ]
+}

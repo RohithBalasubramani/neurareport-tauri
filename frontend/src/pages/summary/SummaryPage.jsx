@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import SummaryPageContainer from '@/features/summary/containers/SummaryPageContainer'
+
+export default function SummaryPage() {
+  useInteraction()
+  return <SummaryPageContainer />
+}

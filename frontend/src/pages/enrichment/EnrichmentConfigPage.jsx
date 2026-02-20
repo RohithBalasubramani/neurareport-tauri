@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import EnrichmentConfigPageContainer from '@/features/enrichment/containers/EnrichmentConfigPageContainer'
+
+export default function EnrichmentConfigPage() {
+  useInteraction()
+  return <EnrichmentConfigPageContainer />
+}

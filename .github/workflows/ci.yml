@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    env:
+      ARTIFACT_WARN_BYTES: "5242880"
+      ARTIFACT_WARN_RENDER_MS: "2000"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-dev.txt
+          pip install pre-commit
+
+      - name: Install Playwright browsers
+        run: python -m playwright install chromium
+
+      - name: Run pre-commit
+        run: pre-commit run --all-files
+
+      - name: Enforce backend architecture
+        run: python scripts/architecture/enforce_backend_arch.py
+
+      - name: Enforce backend import boundaries (import-linter)
+        run: lint-imports --config backend/.importlinter
+
+      - name: Run unit tests
+        env:
+          NEURA_DEBUG: "true"
+          NEURA_JWT_SECRET: "ci-test-secret"
+          DATABASE_URL: "sqlite:///test.db"
+        run: pytest backend/tests
+
+      - name: Verify pipeline artifacts
+        run: python scripts/verify_pipeline.py --template-id ad6a0b1f-d98a-41c2-8ffe-8b651de9100f --uploads-root samples/uploads
+
+      - name: Artifact stats
+        run: python scripts/artifact_stats.py --template-id ad6a0b1f-d98a-41c2-8ffe-8b651de9100f --uploads-root samples/uploads --warn-bytes ${{ env.ARTIFACT_WARN_BYTES }} --warn-render-ms ${{ env.ARTIFACT_WARN_RENDER_MS }}
+
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Run lint
+        run: npm run lint
+        working-directory: frontend
+
+      - name: Run theme lint
+        run: npm run lint:theme
+        working-directory: frontend
+
+      - name: Run unit tests
+        run: npm test -- --run
+        working-directory: frontend
+
+      - name: Build
+        run: npm run build
+        working-directory: frontend

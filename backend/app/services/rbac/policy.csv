@@ -1,0 +1,65 @@
+# Role permissions: p, role, resource_pattern, http_method_regex
+
+# Admin: full access to everything
+p, admin, /*, (GET)|(POST)|(PUT)|(DELETE)|(PATCH)
+
+# Editor: read + write to most resources, no user management
+p, editor, /api/v1/reports/*, (GET)|(POST)|(PUT)|(DELETE)
+p, editor, /api/v1/templates/*, (GET)|(POST)|(PUT)|(DELETE)
+p, editor, /api/v1/documents/*, (GET)|(POST)|(PUT)|(DELETE)
+p, editor, /api/v1/spreadsheets/*, (GET)|(POST)|(PUT)|(DELETE)
+p, editor, /api/v1/dashboards/*, (GET)|(POST)|(PUT)|(DELETE)
+p, editor, /api/v1/charts/*, (GET)|(POST)|(PUT)|(DELETE)
+p, editor, /api/v1/ai/*, (GET)|(POST)
+p, editor, /api/v1/agents/*, (GET)|(POST)
+p, editor, /api/v1/synthesis/*, (GET)|(POST)
+p, editor, /api/v1/docqa/*, (GET)|(POST)
+p, editor, /api/v1/docai/*, (GET)|(POST)
+p, editor, /api/v1/export/*, (GET)|(POST)
+p, editor, /api/v1/ingestion/*, (GET)|(POST)
+p, editor, /api/v1/workflows/*, (GET)|(POST)|(PUT)|(DELETE)
+p, editor, /api/v1/connections/*, (GET)|(POST)|(PUT)|(DELETE)
+p, editor, /api/v1/connectors/*, (GET)|(POST)
+p, editor, /api/v1/knowledge/*, (GET)|(POST)|(PUT)|(DELETE)
+p, editor, /api/v1/search/*, (GET)
+p, editor, /api/v1/analytics/*, (GET)
+p, editor, /api/v1/design/*, (GET)|(POST)|(PUT)
+p, editor, /api/v1/enrichment/*, (GET)|(POST)
+p, editor, /api/v1/nl2sql/*, (GET)|(POST)
+p, editor, /api/v1/visualization/*, (GET)|(POST)
+p, editor, /api/v1/recommendations/*, (GET)|(POST)
+p, editor, /api/v1/federation/*, (GET)|(POST)
+p, editor, /api/v1/summary/*, (GET)|(POST)
+p, editor, /api/v1/jobs/*, (GET)
+
+# Viewer: read-only access + export
+p, viewer, /api/v1/reports/*, (GET)
+p, viewer, /api/v1/templates/*, (GET)
+p, viewer, /api/v1/documents/*, (GET)
+p, viewer, /api/v1/spreadsheets/*, (GET)
+p, viewer, /api/v1/dashboards/*, (GET)
+p, viewer, /api/v1/charts/*, (GET)
+p, viewer, /api/v1/search/*, (GET)
+p, viewer, /api/v1/analytics/*, (GET)
+p, viewer, /api/v1/knowledge/*, (GET)
+p, viewer, /api/v1/connections/*, (GET)
+p, viewer, /api/v1/jobs/*, (GET)
+p, viewer, /api/v1/export/*, (GET)|(POST)
+p, viewer, /api/v1/design/*, (GET)
+
+# Agent: limited to agent endpoints + health
+p, agent, /api/v1/agents/*, (GET)|(POST)
+p, agent, /api/v1/health/*, (GET)
+p, agent, /api/v1/ai/*, (GET)|(POST)
+p, agent, /api/v1/synthesis/*, (GET)|(POST)
+
+# Public endpoints (no role needed)
+p, anonymous, /health, (GET)
+p, anonymous, /healthz, (GET)
+p, anonymous, /ready, (GET)
+p, anonymous, /readyz, (GET)
+p, anonymous, /auth/*, (GET)|(POST)
+
+# Role hierarchy (editor inherits viewer, admin inherits editor)
+g, editor, viewer
+g, admin, editor

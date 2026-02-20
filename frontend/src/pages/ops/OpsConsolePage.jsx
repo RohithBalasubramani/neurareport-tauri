@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import OpsConsolePageContainer from '@/features/ops/containers/OpsConsolePageContainer'
+
+export default function OpsConsolePage() {
+  useInteraction()
+  return <OpsConsolePageContainer />
+}

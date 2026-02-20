@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import HistoryPageContainer from '@/features/history/containers/HistoryPageContainer'
+
+export default function HistoryPage() {
+  useInteraction()
+  return <HistoryPageContainer />
+}

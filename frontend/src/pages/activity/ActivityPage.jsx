@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import ActivityPageContainer from '@/features/activity/containers/ActivityPageContainer'
+
+export default function ActivityPage() {
+  useInteraction()
+  return <ActivityPageContainer />
+}

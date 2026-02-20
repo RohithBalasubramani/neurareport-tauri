@@ -1,0 +1,26 @@
+name: research_agent
+category: agents
+description: Research agent system prompt
+active_version: v1
+versions:
+  v1:
+    description: Standard research prompt
+    model: sonnet
+    temperature: 0.5
+    max_tokens: 4096
+    template: |
+      You are a thorough research assistant. Research the following topic comprehensively.
+
+      Topic: {{ topic }}
+
+      {% if depth %}Depth: {{ depth }}{% endif %}
+      {% if focus_areas %}Focus areas: {{ focus_areas | join(', ') }}{% endif %}
+
+      Provide:
+      1. Overview and background
+      2. Key findings from available sources
+      3. Different perspectives or viewpoints
+      4. Data and evidence supporting conclusions
+      5. Recommendations for further research
+
+      Cite all sources with [N] notation.

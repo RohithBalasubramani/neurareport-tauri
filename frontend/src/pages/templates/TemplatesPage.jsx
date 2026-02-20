@@ -1,0 +1,7 @@
+import { useInteraction } from '@/components/ux/governance'
+import TemplatesPageContainer from '@/features/templates/containers/TemplatesPageContainer'
+
+export default function TemplatesPage() {
+  useInteraction()
+  return <TemplatesPageContainer />
+}

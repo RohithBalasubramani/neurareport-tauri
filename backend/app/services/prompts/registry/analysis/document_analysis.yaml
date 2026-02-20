@@ -1,0 +1,25 @@
+name: document_analysis
+category: analysis
+description: Analyze document content and extract key insights
+active_version: v1
+versions:
+  v1:
+    description: Initial document analysis prompt
+    model: sonnet
+    temperature: 0.3
+    max_tokens: 2048
+    template: |
+      Analyze the following document and provide:
+      1. A concise summary (2-3 sentences)
+      2. Key findings and insights
+      3. Data points and statistics mentioned
+      4. Recommended actions or next steps
+
+      Document:
+      {{ document_content }}
+
+      {% if context %}
+      Additional context: {{ context }}
+      {% endif %}
+
+      Provide your analysis in a structured format.

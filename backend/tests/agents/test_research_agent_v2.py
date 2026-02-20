@@ -885,13 +885,13 @@ class TestAPIEndpoints:
             assert "name" in f
             assert "description" in f
 
-    def test_list_agent_types_has_all_five(self, client):
-        """Agent types endpoint should list all 5 agent types."""
+    def test_list_agent_types_has_all_six(self, client):
+        """Agent types endpoint should list all 6 agent types."""
         response = client.get("/agents/v2/types")
         assert response.status_code == 200
         types = response.json()["types"]
         type_ids = {t["id"] for t in types}
-        assert type_ids == {"research", "data_analyst", "email_draft", "content_repurpose", "proofreading"}
+        assert type_ids == {"research", "data_analyst", "email_draft", "content_repurpose", "proofreading", "report_analyst"}
         for t in types:
             assert "endpoint" in t
             assert t["endpoint"].startswith("/agents/v2/")

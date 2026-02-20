@@ -142,14 +142,14 @@ class TestReorderPages:
         self, pdf_service: PDFOperationsService, sample_pdf: Path
     ):
         """Invalid page number should raise error."""
-        with pytest.raises(ValueError, match="Invalid page number"):
+        with pytest.raises(ValueError, match="out of range"):
             pdf_service.reorder_pages(sample_pdf, [0, 1, 10])
 
     def test_reorder_pages_negative_page_number(
         self, pdf_service: PDFOperationsService, sample_pdf: Path
     ):
         """Negative page number should raise error."""
-        with pytest.raises(ValueError, match="Invalid page number"):
+        with pytest.raises(ValueError, match="out of range"):
             pdf_service.reorder_pages(sample_pdf, [-1, 0, 1])
 
 

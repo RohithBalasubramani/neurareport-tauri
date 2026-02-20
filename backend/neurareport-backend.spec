@@ -12,8 +12,24 @@ from pathlib import Path
 repo_root = Path(SPECPATH).parent  # /home/rohith/desktop/neurareport-tauri
 backend_dir = repo_root / 'backend'
 
-# --- Hidden imports: modules loaded dynamically via importlib ---
-hidden_imports = [
+# --- Auto-discover ALL backend.* modules so nothing is missed ---
+_auto_backend = []
+for py_file in sorted(backend_dir.rglob('*.py')):
+    rel = py_file.relative_to(repo_root)
+    # Skip tests, migrations, .venv, __pycache__
+    parts = rel.parts
+    if any(skip in parts for skip in ('tests', '.venv', '__pycache__', 'migrations')):
+        continue
+    # Convert path to module name: backend/app/foo.py -> backend.app.foo
+    if rel.name == '__init__.py':
+        mod = '.'.join(parts[:-1])
+    else:
+        mod = '.'.join(parts)[:-3]  # strip .py
+    if mod:
+        _auto_backend.append(mod)
+
+# --- Hidden imports: auto-discovered + known dynamic imports ---
+hidden_imports = _auto_backend + [
     # uvicorn internals
     'uvicorn.logging',
     'uvicorn.loops',
@@ -39,64 +55,6 @@ hidden_imports = [
     'pydantic_settings',
     'pydantic.deprecated.decorator',
     'multipart',
-    # Agent modules (dynamically discovered via importlib)
-    'backend.app.services.agents',
-    'backend.app.services.agents.agent_registry',
-    'backend.app.services.agents.agent_service',
-    'backend.app.services.agents.base_agent',
-    'backend.app.services.agents.content_repurpose_agent',
-    'backend.app.services.agents.data_analyst_agent',
-    'backend.app.services.agents.email_draft_agent',
-    'backend.app.services.agents.proofreading_agent',
-    'backend.app.services.agents.report_analyst_agent',
-    'backend.app.services.agents.research_agent',
-    'backend.app.services.agents.service',
-    # All route modules (registered by router.py)
-    'backend.app.api.routes.agents',
-    'backend.app.api.routes.agents_v2',
-    'backend.app.api.routes.ai',
-    'backend.app.api.routes.analytics',
-    'backend.app.api.routes.audit',
-    'backend.app.api.routes.charts',
-    'backend.app.api.routes.connections',
-    'backend.app.api.routes.connectors',
-    'backend.app.api.routes.dashboards',
-    'backend.app.api.routes.design',
-    'backend.app.api.routes.docai',
-    'backend.app.api.routes.docqa',
-    'backend.app.api.routes.documents',
-    'backend.app.api.routes.enrichment',
-    'backend.app.api.routes.excel',
-    'backend.app.api.routes.export',
-    'backend.app.api.routes.federation',
-    'backend.app.api.routes.health',
-    'backend.app.api.routes.ingestion',
-    'backend.app.api.routes.jobs',
-    'backend.app.api.routes.knowledge',
-    'backend.app.api.routes.legacy',
-    'backend.app.api.routes.logger',
-    'backend.app.api.routes.nl2sql',
-    'backend.app.api.routes.recommendations',
-    'backend.app.api.routes.reports',
-    'backend.app.api.routes.schedules',
-    'backend.app.api.routes.search',
-    'backend.app.api.routes.spreadsheets',
-    'backend.app.api.routes.state',
-    'backend.app.api.routes.summary',
-    'backend.app.api.routes.synthesis',
-    'backend.app.api.routes.templates',
-    'backend.app.api.routes.visualization',
-    'backend.app.api.routes.widgets',
-    'backend.app.api.routes.workflows',
-    # Legacy services with importlib
-    'backend.legacy.services.report_service',
-    'backend.legacy.services.file_service',
-    'backend.legacy.services.mapping',
-    'backend.legacy.services.scheduler_service',
-    # Auth
-    'backend.app.services.auth',
-    # DB
-    'backend.app.services.db.engine',
     # Email validator (often missed)
     'email_validator',
     # Starlette internals

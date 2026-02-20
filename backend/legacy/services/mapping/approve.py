@@ -30,7 +30,9 @@ from backend.legacy.utils.template_utils import artifact_url, manifest_endpoint,
 from backend.legacy.utils.mapping_utils import mapping_keys_path, normalize_key_tokens, write_mapping_keys
 from backend.legacy.services.mapping.helpers import (
     build_catalog_from_db as _build_catalog_from_db,
+    build_rich_catalog_from_db,
     compute_db_signature,
+    format_catalog_rich,
     http_error as _http_error,
     load_mapping_step3 as _load_mapping_step3,
     load_schema_ext as _load_schema_ext,
@@ -91,6 +93,8 @@ async def run_mapping_approve(
     auto_mapping_doc, _ = _load_mapping_step3(template_dir_path)
     auto_mapping_proposal = auto_mapping_doc or {}
     catalog = list(dict.fromkeys(_build_catalog_from_db(db_path)))
+    rich_catalog = build_rich_catalog_from_db(db_path)
+    rich_catalog_text = format_catalog_rich(rich_catalog) if rich_catalog else None
     db_sig = compute_db_signature(db_path)
 
     try:
@@ -252,6 +256,8 @@ async def run_mapping_approve(
                     dialect_hint=payload.dialect_hint,
                     db_signature=db_sig,
                     key_tokens=keys_clean,
+                    db_path=db_path,
+                    rich_catalog_text=rich_catalog_text,
                 )
                 contract_ready = True
                 contract_artifacts_urls = _normalize_artifact_map(contract_result.get("artifacts"))

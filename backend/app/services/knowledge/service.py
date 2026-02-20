@@ -35,9 +35,8 @@ from backend.app.schemas.knowledge.library import (
 logger = logging.getLogger(__name__)
 
 
-def _now() -> str:
-    """Return current UTC time as ISO 8601 string, matching store.py._now_iso()."""
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class KnowledgeService:

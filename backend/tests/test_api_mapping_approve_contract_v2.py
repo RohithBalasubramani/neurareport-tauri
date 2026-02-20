@@ -144,9 +144,6 @@ def test_mapping_approve_emits_contract_stage(monkeypatch, tmp_path, client):
             indent=2,
         )
 
-        contract_path = template_dir / "contract.json"
-        write_json_atomic(contract_path, contract_payload, ensure_ascii=False, indent=2)
-
         write_artifact_manifest(
             template_dir,
             step="contract_build_v2_test",
@@ -154,7 +151,6 @@ def test_mapping_approve_emits_contract_stage(monkeypatch, tmp_path, client):
                 "overview.md": overview_path,
                 "step5_requirements.json": step5_path,
                 "contract_v2_meta.json": meta_path,
-                "contract.json": contract_path,
             },
             inputs=[],
             correlation_id=None,
@@ -175,7 +171,6 @@ def test_mapping_approve_emits_contract_stage(monkeypatch, tmp_path, client):
                 "overview": overview_path,
                 "step5_requirements": step5_path,
                 "meta": meta_path,
-                "contract": contract_path,
             },
             "meta": {
                 "assumptions": [],
@@ -294,8 +289,7 @@ def test_mapping_approve_emits_contract_stage(monkeypatch, tmp_path, client):
         evt for evt in events if evt.get("event") == "stage" and evt.get("stage") == "generator_assets_v1"
     ]
     assert generator_stage_events, "Expected generator_assets_v1 stage event"
-    # In DataFrame mode the generator stage is skipped — the contract artifact
-    # is produced by contract_build_v2 and also verified on disk below.
+    assert "contract" in (generator_stage_events[-1].get("artifacts") or {})
 
     result_events = [evt for evt in events if evt.get("event") == "result"]
     assert result_events, "Expected final result event"

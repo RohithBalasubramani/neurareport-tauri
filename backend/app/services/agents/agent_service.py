@@ -397,13 +397,11 @@ class AgentService:
             self._enqueue_background(task.task_id)
             return task
 
-    async def _execute_task(self, task_id: str, *, already_claimed: bool = False) -> AgentTaskModel:
+    async def _execute_task(self, task_id: str) -> AgentTaskModel:
         """Execute a task with proper state management.
 
         Args:
             task_id: Task to execute
-            already_claimed: If True, skip the claim step (task already RUNNING
-                via claim_batch).
 
         Returns:
             Updated AgentTaskModel
@@ -417,20 +415,17 @@ class AgentService:
 
         try:
 
-            if already_claimed:
-                task = self._repo.get_task_or_raise(task_id)
-            else:
-                # Claim the task — transition PENDING → RUNNING atomically.
-                # A TaskConflictError means another worker legitimately claimed
-                # the task first; this is an expected race, not a real error.
-                try:
-                    task = self._repo.claim_task(task_id)
-                except TaskConflictError:
-                    logger.debug(f"Task {task_id} already claimed by another worker, skipping")
-                    return self._repo.get_task_or_raise(task_id)
-                except Exception as e:
-                    logger.error(f"Failed to claim task {task_id}: {e}")
-                    raise
+            # Claim the task — transition PENDING → RUNNING atomically.
+            # A TaskConflictError means another worker legitimately claimed
+            # the task first; this is an expected race, not a real error.
+            try:
+                task = self._repo.claim_task(task_id)
+            except TaskConflictError:
+                logger.debug(f"Task {task_id} already claimed by another worker, skipping")
+                return self._repo.get_task_or_raise(task_id)
+            except Exception as e:
+                logger.error(f"Failed to claim task {task_id}: {e}")
+                raise
 
             # Get the agent implementation.
             # Prefer the explicit AgentType -> agent mapping so tests/legacy code
@@ -494,40 +489,26 @@ class AgentService:
 
         except AgentError as e:
             # Fail with proper categorization
-            try:
-                task = self._repo.fail_task(
-                    task_id,
-                    error_message=e.message,
-                    error_code=e.code,
-                    is_retryable=e.retryable,
-                )
-            except TaskConflictError:
-                logger.debug(f"Cannot fail task {task_id}: state already changed")
-                return self._repo.get_task_or_raise(task_id)
+            task = self._repo.fail_task(
+                task_id,
+                error_message=e.message,
+                error_code=e.code,
+                is_retryable=e.retryable,
+            )
             if task.webhook_url and task.is_terminal():
                 await self._notify_webhook(task)
             return task
-
-        except TaskConflictError:
-            # Task state changed by another worker (e.g. cancelled externally,
-            # or concurrent complete/fail).  This is expected, not an error.
-            logger.debug(f"Task {task_id} state conflict (concurrent update), skipping")
-            return self._repo.get_task_or_raise(task_id)
 
         except Exception as e:
             # Unexpected error - mark as retryable
             logger.exception(f"Unexpected error executing task {task_id}")
             error_message = str(e) or "Task execution failed due to an unexpected error"
-            try:
-                task = self._repo.fail_task(
-                    task_id,
-                    error_message=error_message,
-                    error_code="UNEXPECTED_ERROR",
-                    is_retryable=True,
-                )
-            except TaskConflictError:
-                logger.debug(f"Cannot fail task {task_id}: state already changed")
-                return self._repo.get_task_or_raise(task_id)
+            task = self._repo.fail_task(
+                task_id,
+                error_message=error_message,
+                error_code="UNEXPECTED_ERROR",
+                is_retryable=True,
+            )
             if task.webhook_url and task.is_terminal():
                 await self._notify_webhook(task)
             return task
@@ -806,9 +787,8 @@ class AgentService:
     async def process_pending_tasks(self, limit: int = 5) -> int:
         """Process pending tasks (for worker mode).
 
-        Uses ``claim_batch`` to atomically transition PENDING → RUNNING,
-        eliminating the TOCTOU race between listing and claiming.  Claimed
-        tasks are submitted to the ThreadPoolExecutor for parallel execution.
+        Uses ``_enqueue_background`` so tasks run in parallel within the
+        ThreadPoolExecutor rather than blocking the worker loop sequentially.
 
         Args:
             limit: Maximum number of tasks to process
@@ -816,18 +796,24 @@ class AgentService:
         Returns:
             Number of tasks enqueued
         """
-        with self._running_tasks_lock:
-            exclude = set(self._running_tasks)
+        from backend.app.repositories.agent_tasks.repository import TaskConflictError
 
-        claimed = self._repo.claim_batch(limit=limit, exclude_task_ids=exclude)
+        pending = self._repo.list_pending_tasks(limit=limit)
         enqueued = 0
 
-        for task in claimed:
+        for task in pending:
+            with self._running_tasks_lock:
+                if task.task_id in self._running_tasks:
+                    continue
+
             try:
-                self._enqueue_background(task.task_id, already_claimed=True)
+                self._enqueue_background(task.task_id)
                 enqueued += 1
+            except TaskConflictError:
+                # Another worker already claimed it — expected race condition
+                logger.debug(f"Task {task.task_id} already claimed by another worker")
             except Exception as e:
-                logger.error(f"Failed to enqueue claimed task {task.task_id}: {e}")
+                logger.error(f"Failed to enqueue pending task {task.task_id}: {e}")
 
         return enqueued
 
@@ -882,7 +868,7 @@ class AgentService:
     # BACKGROUND EXECUTION (Trade-off 1)
     # =========================================================================
 
-    def _enqueue_background(self, task_id: str, *, already_claimed: bool = False) -> None:
+    def _enqueue_background(self, task_id: str) -> None:
         """Submit a task to the ThreadPoolExecutor for background execution.
 
         The executor runs in a daemon thread and persists across request
@@ -895,8 +881,6 @@ class AgentService:
 
         Args:
             task_id: Task to execute
-            already_claimed: If True, the task is already RUNNING (claimed by
-                claim_batch); skip the claim step inside _execute_task.
         """
         # Mark the task as tracked BEFORE submitting to the executor so that
         # concurrent poll cycles do not enqueue the same task twice.
@@ -911,7 +895,7 @@ class AgentService:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    loop.run_until_complete(self._execute_task(task_id, already_claimed=already_claimed))
+                    loop.run_until_complete(self._execute_task(task_id))
                 finally:
                     loop.close()
             except Exception:

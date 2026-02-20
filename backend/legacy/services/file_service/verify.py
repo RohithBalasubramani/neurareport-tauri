@@ -4,6 +4,7 @@ import contextlib
 import importlib
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -417,9 +418,21 @@ def verify_template(file: UploadFile, connection_id: str | None, request: Reques
     return StreamingResponse(event_stream(), headers=headers, media_type="application/x-ndjson")
 
 
+def _sanitize_upload_filename(filename: str) -> str:
+    """Sanitize uploaded filename to prevent multipart parsing issues.
+    Replaces commas, semicolons, and other problematic characters with underscores.
+    Preserves the file extension."""
+    if not filename:
+        return filename
+    stem = Path(filename).stem
+    suffix = Path(filename).suffix
+    clean_stem = re.sub(r'[,;"\'\\|<>]', "_", stem)
+    return f"{clean_stem}{suffix}"
+
+
 def verify_excel(file: UploadFile, request: Request, connection_id: str | None = None):
     template_kind = "excel"
-    original_filename = getattr(file, "filename", "") or ""
+    original_filename = _sanitize_upload_filename(getattr(file, "filename", "") or "")
     template_name_hint = Path(original_filename).stem if original_filename else ""
     tid = generate_template_id(template_name_hint or "Workbook", kind=template_kind)
     tdir = template_dir(tid, must_exist=False, create=True, kind=template_kind)
@@ -619,11 +632,12 @@ def verify_excel(file: UploadFile, request: Request, connection_id: str | None =
             )
         except Exception as exc:
             logger.exception("excel_verify_failed")
-            failed_error = "Excel verification failed"
+            exc_detail = str(exc).strip() if str(exc).strip() else "Excel verification failed"
+            failed_error = exc_detail
             yield emit(
                 "error",
                 stage="Excel verification failed.",
-                detail="Excel verification failed",
+                detail=exc_detail,
                 template_id=tid,
                 kind=template_kind,
             )

@@ -208,11 +208,50 @@ def _load_page_summary(template_dir: Path) -> str:
     return ""
 
 
+def _normalize_token_list(raw: list) -> list[str]:
+    """Normalize a token list — extract token names from dict-like LLM entries.
+
+    The LLM occasionally returns structured objects like
+    ``{"token": "row_x", "description": "...", "type": "..."}`` instead of
+    plain ``"row_x"`` strings.  This normalises both forms to flat strings.
+    """
+    out: list[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            name = item.get("token") or item.get("name") or ""
+            if name:
+                out.append(str(name))
+        elif isinstance(item, str):
+            text = item.strip()
+            # Detect stringified dict: "{'token': 'row_x', ...}"
+            if text.startswith("{") and "token" in text:
+                import ast
+                try:
+                    parsed = ast.literal_eval(text)
+                    if isinstance(parsed, dict):
+                        name = parsed.get("token") or parsed.get("name") or ""
+                        if name:
+                            out.append(str(name))
+                            continue
+                except (ValueError, SyntaxError):
+                    pass
+            if text:
+                out.append(text)
+    return out
+
+
 def _augment_contract_for_compat(contract: dict[str, Any]) -> dict[str, Any]:
     tokens = contract.get("tokens") or {}
-    scalars = list(tokens.get("scalars") or [])
-    row_tokens = list(tokens.get("row_tokens") or [])
-    totals = list(tokens.get("totals") or [])
+    scalars = _normalize_token_list(list(tokens.get("scalars") or []))
+    row_tokens = _normalize_token_list(list(tokens.get("row_tokens") or []))
+    totals = _normalize_token_list(list(tokens.get("totals") or []))
+
+    # Write normalised lists back into the tokens block
+    if isinstance(tokens, dict):
+        tokens["scalars"] = scalars
+        tokens["row_tokens"] = row_tokens
+        tokens["totals"] = totals
+        contract["tokens"] = tokens
 
     contract.setdefault("header_tokens", scalars)
     contract.setdefault("row_tokens", row_tokens)
@@ -298,6 +337,45 @@ def _normalize_contract_payload(contract: Mapping[str, Any] | None) -> dict[str,
                         "reason": "parent_table and parent_key are required for a valid join",
                     },
                 )
+
+    # ── Strip UNRESOLVED entries from mapping/tokens/reshape ──
+    mapping = normalized.get("mapping")
+    if isinstance(mapping, dict):
+        unresolved_tokens = [
+            k for k, v in mapping.items()
+            if isinstance(v, str) and v.strip().upper() in ("UNRESOLVED", "")
+        ]
+        for tok in unresolved_tokens:
+            mapping.pop(tok)
+        # Track them in unresolved list
+        existing_unresolved = normalized.get("unresolved", [])
+        if not isinstance(existing_unresolved, list):
+            existing_unresolved = []
+        existing_unresolved.extend(unresolved_tokens)
+        normalized["unresolved"] = list(dict.fromkeys(existing_unresolved))
+
+        if unresolved_tokens:
+            logger.info(
+                "contract_unresolved_tokens_stripped",
+                extra={
+                    "event": "contract_unresolved_tokens_stripped",
+                    "tokens": unresolved_tokens,
+                    "count": len(unresolved_tokens),
+                },
+            )
+            # Remove from row_tokens/header_tokens lists
+            unresolved_set = set(unresolved_tokens)
+            for key in ("row_tokens", "header_tokens"):
+                tokens_list = normalized.get(key)
+                if isinstance(tokens_list, list):
+                    normalized[key] = [t for t in tokens_list if t not in unresolved_set]
+            # Clean reshape_rules columns
+            reshape_rules = normalized.get("reshape_rules")
+            if isinstance(reshape_rules, list):
+                for rule in reshape_rules:
+                    cols = rule.get("columns")
+                    if isinstance(cols, list):
+                        rule["columns"] = [c for c in cols if c.get("as") not in unresolved_set]
 
     return normalized
 
@@ -666,6 +744,224 @@ def _serialize_contract(contract: dict[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps(contract, ensure_ascii=False))
 
 
+# ---------------------------------------------------------------------------
+# date_columns validation — prevent silent row drops from bad LLM guesses
+# ---------------------------------------------------------------------------
+
+_DATE_NAME_PATTERNS = ("date", "timestamp", "_dt", "_ts", "time", "created", "updated")
+
+
+def _validate_date_columns_against_db(contract: dict[str, Any], db_path) -> dict[str, Any]:
+    """Validate date_columns entries against actual DB column types/values.
+
+    The LLM often picks non-date columns (e.g. ``id``, ``minute_utc`` stored as
+    TEXT) for ``date_columns``.  When the report pipeline later coerces these to
+    datetime and applies a date-range filter, ALL rows are silently dropped.
+
+    This function checks each entry by:
+    1. Name heuristic — does the column name look like a date column?
+    2. Value sampling — do sample values actually parse as dates?
+
+    Invalid entries are removed and a warning is logged.
+    """
+    if db_path is None:
+        return contract
+
+    date_columns = contract.get("date_columns")
+    if not isinstance(date_columns, dict) or not date_columns:
+        return contract
+
+    try:
+        from backend.legacy.utils.connection_utils import get_loader_for_ref
+        from ..reports.discovery_excel import _parse_date_like
+
+        loader = get_loader_for_ref(db_path)
+    except Exception:
+        logger.debug("date_columns_validation_skipped_no_loader", extra={"db_path": str(db_path)})
+        return contract
+
+    invalid_keys: list[str] = []
+    for table, col in list(date_columns.items()):
+        if not table or not col:
+            invalid_keys.append(table)
+            continue
+
+        # 1) Name heuristic
+        col_lower = col.lower()
+        name_looks_like_date = any(pat in col_lower for pat in _DATE_NAME_PATTERNS)
+
+        # 2) Value sampling — load actual data and check parseability
+        values_look_like_dates = False
+        try:
+            frame = loader.frame(table)
+            if frame is not None and col in frame.columns:
+                non_null = frame[col].dropna().head(10)
+                if not non_null.empty:
+                    samples = [str(v).strip() for v in non_null if str(v).strip()]
+                    if samples:
+                        date_hits = sum(1 for v in samples if _parse_date_like(v) is not None)
+                        values_look_like_dates = date_hits >= max(1, len(samples) * 0.5)
+        except Exception:
+            pass
+
+        if not name_looks_like_date and not values_look_like_dates:
+            invalid_keys.append(table)
+            logger.warning(
+                "date_columns_invalid_entry_removed",
+                extra={
+                    "event": "date_columns_invalid_entry_removed",
+                    "table": table,
+                    "column": col,
+                    "reason": "column does not look like a date column by name or value",
+                },
+            )
+
+    for key in invalid_keys:
+        date_columns.pop(key, None)
+
+    return contract
+
+
+# ---------------------------------------------------------------------------
+# mapping column-existence validation — reject phantom column references
+# ---------------------------------------------------------------------------
+
+_DIRECT_COL_RE_VALIDATE = re.compile(
+    r"^\s*(?P<table>[A-Za-z_][\w]*)\s*\.\s*(?P<column>[A-Za-z_][\w]*)\s*$"
+)
+
+
+def _validate_mapping_columns_against_catalog(
+    contract: dict[str, Any],
+    catalog: Iterable[str],
+) -> dict[str, Any]:
+    """Check every mapping entry references a column that exists in the catalog.
+
+    Entries that point to non-existent ``table.column`` are cleared and the
+    token is moved to the ``unresolved`` list so downstream stages (reshape,
+    row_tokens) can ignore them rather than produce silent empty cells.
+    """
+    catalog_set = {str(c).strip() for c in catalog if str(c).strip()}
+    if not catalog_set:
+        return contract
+
+    mapping = contract.get("mapping")
+    if not isinstance(mapping, dict) or not mapping:
+        return contract
+
+    _skip = {"UNRESOLVED", ""}
+    invalid_tokens: list[str] = []
+
+    for token, expr in list(mapping.items()):
+        text = str(expr or "").strip()
+        if not text or text.upper() in _skip:
+            continue
+        # Only validate simple table.column refs (not PARAM:x, not dicts)
+        m = _DIRECT_COL_RE_VALIDATE.match(text)
+        if not m:
+            continue
+        ref = f"{m.group('table')}.{m.group('column')}"
+        if ref not in catalog_set:
+            invalid_tokens.append(token)
+            mapping[token] = ""
+            logger.warning(
+                "mapping_column_not_in_catalog",
+                extra={
+                    "event": "mapping_column_not_in_catalog",
+                    "token": token,
+                    "reference": ref,
+                    "reason": "column does not exist in database catalog",
+                },
+            )
+
+    # Track in unresolved list
+    if invalid_tokens:
+        existing = contract.get("unresolved", [])
+        if not isinstance(existing, list):
+            existing = []
+        existing.extend(invalid_tokens)
+        contract["unresolved"] = list(dict.fromkeys(existing))
+
+    return contract
+
+
+# ---------------------------------------------------------------------------
+# UNRESOLVED token cleanup — remove phantom tokens from contract sections
+# ---------------------------------------------------------------------------
+
+def _strip_unresolved_from_contract(contract: dict[str, Any]) -> dict[str, Any]:
+    """Remove UNRESOLVED / empty mapping entries and their corresponding
+    row_tokens, header_tokens, reshape columns, and formatters.
+
+    This prevents the report renderer from creating empty cells for tokens
+    that have no data source.
+    """
+    mapping = contract.get("mapping")
+    if not isinstance(mapping, dict):
+        return contract
+
+    unresolved_tokens: list[str] = []
+    for tok, expr in list(mapping.items()):
+        text = str(expr or "").strip()
+        if not text or text.upper() == "UNRESOLVED":
+            unresolved_tokens.append(tok)
+            mapping.pop(tok)
+
+    if not unresolved_tokens:
+        return contract
+
+    unresolved_set = set(unresolved_tokens)
+
+    # Track in unresolved list
+    existing = contract.get("unresolved", [])
+    if not isinstance(existing, list):
+        existing = []
+    existing.extend(unresolved_tokens)
+    contract["unresolved"] = list(dict.fromkeys(existing))
+
+    # Remove from token lists
+    for key in ("row_tokens", "header_tokens"):
+        tokens_list = contract.get(key)
+        if isinstance(tokens_list, list):
+            contract[key] = [t for t in tokens_list if t not in unresolved_set]
+
+    # Also clean from tokens.row_tokens / tokens.scalars
+    tokens_block = contract.get("tokens")
+    if isinstance(tokens_block, dict):
+        for sub_key in ("row_tokens", "scalars", "totals"):
+            sub_list = tokens_block.get(sub_key)
+            if isinstance(sub_list, list):
+                tokens_block[sub_key] = [t for t in sub_list if t not in unresolved_set]
+
+    # Clean reshape_rules columns
+    reshape_rules = contract.get("reshape_rules")
+    if isinstance(reshape_rules, list):
+        for rule in reshape_rules:
+            cols = rule.get("columns")
+            if isinstance(cols, list):
+                rule["columns"] = [
+                    c for c in cols
+                    if not isinstance(c, dict) or c.get("as") not in unresolved_set
+                ]
+
+    # Clean formatters
+    formatters = contract.get("formatters")
+    if isinstance(formatters, dict):
+        for tok in unresolved_tokens:
+            formatters.pop(tok, None)
+
+    logger.info(
+        "contract_unresolved_tokens_stripped",
+        extra={
+            "event": "contract_unresolved_tokens_stripped",
+            "count": len(unresolved_tokens),
+            "tokens": unresolved_tokens,
+        },
+    )
+
+    return contract
+
+
 def build_or_load_contract_v2(
     template_dir: Path,
     catalog: Iterable[str],
@@ -680,6 +976,8 @@ def build_or_load_contract_v2(
     key_tokens: Iterable[str] | None = None,
     prompt_builder=build_llm_call_4_prompt,
     prompt_version: str = PROMPT_VERSION_4,
+    db_path=None,
+    rich_catalog_text: str | None = None,
 ) -> dict[str, Any]:
     """
     Build (or return cached) contract artifacts using LLM Call 4.
@@ -744,6 +1042,7 @@ def build_or_load_contract_v2(
         catalog=allow_list,
         dialect_hint=dialect_hint,
         key_tokens=key_tokens_list,
+        rich_catalog_text=rich_catalog_text,
     )
 
     system_text = prompt_payload.get("system", "")
@@ -825,6 +1124,15 @@ def build_or_load_contract_v2(
         allow_list=allow_list,
         fallback_mapping=fallback_mapping_sources,
     )
+
+    # Validate date_columns against actual DB data to prevent silent row drops
+    _validate_date_columns_against_db(contract, db_path)
+
+    # Validate that mapped columns actually exist in the DB catalog
+    _validate_mapping_columns_against_catalog(contract, allow_list)
+
+    # Strip UNRESOLVED / empty mapping entries and their downstream references
+    _strip_unresolved_from_contract(contract)
 
     now = int(time.time())
     overview_path = template_dir / _OVERVIEW_FILENAME

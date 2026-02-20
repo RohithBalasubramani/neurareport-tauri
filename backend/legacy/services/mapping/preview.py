@@ -5,11 +5,12 @@ import hashlib
 import importlib
 import json
 import logging
+import re
 from typing import Any, Iterator, Optional
 
 from fastapi import HTTPException, Request
 
-from backend.app.repositories.connections.db_connection import verify_sqlite
+from backend.legacy.utils.connection_utils import verify_connection
 from backend.app.services.mapping.AutoMapInline import MappingInlineValidationError, run_llm_call_3
 from backend.app.services.mapping.CorrectionsPreview import run_corrections_preview as corrections_preview_fn
 from backend.app.services.mapping.HeaderMapping import approval_errors, get_parent_child_info
@@ -48,7 +49,7 @@ def _mapping_preview_pipeline(
         api_mod = importlib.import_module("backend.api")
     except Exception:
         api_mod = None
-    verify_sqlite_fn = getattr(api_mod, "verify_sqlite", verify_sqlite)
+    verify_sqlite_fn = getattr(api_mod, "verify_connection", verify_connection)
     run_llm_call_3_fn = getattr(api_mod, "run_llm_call_3", run_llm_call_3)
     build_catalog_fn = getattr(api_mod, "_build_catalog_from_db", build_catalog_from_db)
     get_parent_child_info_fn = getattr(api_mod, "get_parent_child_info", get_parent_child_info)
@@ -86,8 +87,11 @@ def _mapping_preview_pipeline(
     except Exception:
         logger.warning("rich_catalog_build_degraded", extra={"template_id": template_id})
 
+    # Extract header labels from template HTML for table-matching heuristic
+    _header_hints = re.findall(r'data-label="([^"]+)"', template_html)
+
     try:
-        schema_info = get_parent_child_info_fn(db_path)
+        schema_info = get_parent_child_info_fn(db_path, header_hints=_header_hints)
     except Exception as exc:
         logger.warning(
             "mapping_preview_schema_probe_degraded",

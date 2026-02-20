@@ -166,12 +166,11 @@ def test_fix_html_refine_stage_runs_even_when_target_met(monkeypatch, tmp_path: 
     monkeypatch.setattr(api, "state_store", _DummyState())
 
     # Patch pipeline helpers
-    def fake_pdf_to_pngs(pdf_path: Path, out_dir: Path, dpi: int = 400, *, page: int = 0):
+    def fake_pdf_to_pngs(pdf_path: Path, out_dir: Path, dpi: int = 400):
         target = out_dir / "reference_p1.png"
         _write_png(target)
         return [target]
 
-    monkeypatch.setattr(api, "pdf_page_count", lambda pdf_path: 1)
     monkeypatch.setattr(api, "pdf_to_pngs", fake_pdf_to_pngs)
     monkeypatch.setattr(api, "get_layout_hints", lambda *args, **kwargs: {})
 

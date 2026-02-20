@@ -138,6 +138,14 @@ def verify_sqlite(path) -> None:
         verify_postgres(path.connection_url)
         return
 
+    # Guard against PostgreSQL URLs passed as plain strings (e.g. from legacy
+    # callers that converted ConnectionRef to str before reaching here).
+    path_str = str(path)
+    if path_str.startswith(("postgresql:", "postgres:")):
+        from backend.app.repositories.dataframes.postgres_loader import verify_postgres
+        verify_postgres(path_str)
+        return
+
     db_file = Path(path)
     if not db_file.exists():
         raise FileNotFoundError(f"SQLite DB not found: {path}")

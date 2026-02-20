@@ -39,6 +39,21 @@ from backend.app.schemas.analytics import (
 )
 
 
+def _safe_float(value, default: float = 0.0) -> float:
+    """Convert a numeric value to a JSON-safe float.
+
+    Replaces NaN and Infinity with *default* so that downstream JSON
+    serialization never raises ``ValueError: Out of range float values``.
+    """
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return default
+    if np.isnan(f) or np.isinf(f):
+        return default
+    return f
+
+
 class InsightService:
     """Service for generating automated insights from data."""
 
@@ -159,9 +174,9 @@ class InsightService:
             confidence=min(abs(normalized_slope), 1.0),
             related_columns=[name],
             data={
-                "slope": float(slope),
+                "slope": _safe_float(slope),
                 "direction": direction,
-                "percentage_change": float(pct_change),
+                "percentage_change": _safe_float(pct_change),
             },
             visualization_hint="line_chart",
         )
@@ -328,9 +343,13 @@ class TrendService:
         else:
             direction = TrendDirection.DOWN
 
-        # Detect volatility
-        returns = np.diff(values) / values[:-1] if len(values) > 1 else np.array([0])
-        volatility = returns.std()
+        # Detect volatility — guard against division by zero when values contain 0
+        if len(values) > 1:
+            safe_prev = np.where(values[:-1] == 0, np.nan, values[:-1])
+            returns = np.diff(values) / safe_prev
+            volatility = np.nanstd(returns) if not np.all(np.isnan(returns)) else 0.0
+        else:
+            volatility = 0.0
         if volatility > 0.1:  # High volatility threshold
             direction = TrendDirection.VOLATILE
 
@@ -346,8 +365,8 @@ class TrendService:
 
         return TrendResult(
             direction=direction,
-            slope=float(slope),
-            strength=float(abs(r_squared)),
+            slope=_safe_float(slope),
+            strength=_safe_float(abs(r_squared)),
             seasonality=seasonality,
             change_points=change_points,
             description=description,
@@ -540,15 +559,19 @@ class TrendService:
                 forecasts.append(ForecastPoint(
                     index=idx,
                     timestamp=row["ds"],
-                    predicted=float(row["yhat"]),
-                    lower_bound=float(row["yhat_lower"]),
-                    upper_bound=float(row["yhat_upper"]),
+                    predicted=_safe_float(row["yhat"]),
+                    lower_bound=_safe_float(row["yhat_lower"]),
+                    upper_bound=_safe_float(row["yhat_upper"]),
                 ))
 
-            # Calculate accuracy on historical data
+            # Calculate accuracy on historical data — guard against zero values
             in_sample = forecast.iloc[:len(values)]
-            mape = np.mean(np.abs((values - in_sample["yhat"].values) / values))
-            accuracy = 1 - mape
+            nonzero_mask = values != 0
+            if nonzero_mask.any():
+                mape = np.mean(np.abs((values[nonzero_mask] - in_sample["yhat"].values[nonzero_mask]) / values[nonzero_mask]))
+            else:
+                mape = 0.0
+            accuracy = _safe_float(1 - mape)
 
             return forecasts, max(accuracy, 0)
 
@@ -597,12 +620,13 @@ class AnomalyService:
 
         values = np.array(request.data.values)
         clean_values = values.copy()
-        clean_values[np.isnan(clean_values)] = np.nanmean(values)
+        fill_value = np.nanmean(values) if not np.all(np.isnan(values)) else 0.0
+        clean_values[np.isnan(clean_values)] = fill_value
 
         # Calculate baseline statistics
-        mean = float(np.mean(clean_values))
-        std = float(np.std(clean_values))
-        median = float(np.median(clean_values))
+        mean = _safe_float(np.mean(clean_values))
+        std = _safe_float(np.std(clean_values))
+        median = _safe_float(np.median(clean_values))
 
         anomalies: List[Anomaly] = []
 
@@ -799,6 +823,10 @@ class CorrelationService:
         if len(a) < 3:
             return 0.0, 1.0
 
+        # Constant arrays produce NaN from scipy — return 0 correlation
+        if np.std(a) == 0 or np.std(b) == 0:
+            return 0.0, 1.0
+
         if method == CorrelationType.PEARSON:
             corr, p_value = stats.pearsonr(a, b)
         elif method == CorrelationType.SPEARMAN:
@@ -808,7 +836,7 @@ class CorrelationService:
         else:
             corr, p_value = stats.pearsonr(a, b)
 
-        return float(corr), float(p_value)
+        return _safe_float(corr), _safe_float(p_value, default=1.0)
 
     def _correlation_strength(self, corr: float) -> CorrelationStrength:
         """Determine correlation strength from coefficient."""

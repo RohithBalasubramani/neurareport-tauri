@@ -10,7 +10,7 @@
       "identifier": "shell:allow-execute",
       "allow": [
         {
-          "name": "binaries/neurareport-backend",
+          "name": "neurareport-backend",
           "sidecar": true,
           "args": true
         }

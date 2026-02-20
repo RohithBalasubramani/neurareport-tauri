@@ -78,7 +78,7 @@ pub fn run() {
                 // Production: spawn the PyInstaller-bundled backend sidecar
                 let sidecar_result = app
                     .shell()
-                    .sidecar("binaries/neurareport-backend")
+                    .sidecar("neurareport-backend")
                     .map(|cmd| cmd.args(["--port", &port.to_string()]));
 
                 match sidecar_result {

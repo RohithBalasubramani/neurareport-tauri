@@ -55,13 +55,13 @@ jobs:
           pip install pyinstaller
 
       - name: Build backend sidecar (PyInstaller)
-        run: python -m PyInstaller backend/neurareport-backend.spec --distpath frontend/src-tauri/binaries/ --noconfirm --clean
+        run: python -m PyInstaller backend/neurareport-backend.spec --distpath frontend/src-tauri/ --noconfirm --clean
 
       - name: Rename sidecar with target triple
         shell: pwsh
         run: |
-          Move-Item "frontend/src-tauri/binaries/neurareport-backend.exe" `
-                    "frontend/src-tauri/binaries/neurareport-backend-x86_64-pc-windows-msvc.exe"
+          Move-Item "frontend/src-tauri/neurareport-backend.exe" `
+                    "frontend/src-tauri/neurareport-backend-x86_64-pc-windows-msvc.exe"
 
       - name: Build Tauri desktop app
         working-directory: frontend
@@ -136,10 +136,10 @@ jobs:
           pip install pyinstaller
 
       - name: Build backend sidecar (PyInstaller)
-        run: python -m PyInstaller backend/neurareport-backend.spec --distpath frontend/src-tauri/binaries/ --noconfirm --clean
+        run: python -m PyInstaller backend/neurareport-backend.spec --distpath frontend/src-tauri/ --noconfirm --clean
 
       - name: Rename sidecar with target triple
-        run: mv frontend/src-tauri/binaries/neurareport-backend frontend/src-tauri/binaries/neurareport-backend-x86_64-unknown-linux-gnu
+        run: mv frontend/src-tauri/neurareport-backend frontend/src-tauri/neurareport-backend-x86_64-unknown-linux-gnu
 
       - name: Build Tauri desktop app
         working-directory: frontend

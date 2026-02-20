@@ -348,11 +348,9 @@ def fill_and_print(
         except Exception:
             logger.warning("Failed to inject brand kit CSS (Excel path)", exc_info=True)
 
-    # Resolve the correct loader for any connection type (SQLite or PostgreSQL).
-    # get_loader_for_ref() is the single dispatcher — avoids passing ConnectionRef
-    # objects to SQLiteDataFrameLoader which would trigger __fspath__() and fail.
-    from backend.legacy.utils.connection_utils import get_loader_for_ref, ConnectionRef
-    if isinstance(DB_PATH, ConnectionRef) or hasattr(DB_PATH, 'is_postgresql'):
+    # Support both SQLite and PostgreSQL connections via ConnectionRef
+    if hasattr(DB_PATH, 'is_postgresql') and DB_PATH.is_postgresql:
+        from backend.legacy.utils.connection_utils import get_loader_for_ref
         dataframe_loader = get_loader_for_ref(DB_PATH)
     else:
         dataframe_loader = SQLiteDataFrameLoader(DB_PATH)
@@ -1705,9 +1703,8 @@ def fill_and_print(
     for t, s in LITERALS.items():
         html_multi = sub_token(html_multi, t, s)
 
-    # Blank any remaining known tokens (including unresolved ones stripped from the contract)
-    UNRESOLVED_TOKENS = set(OBJ.get("unresolved", []) or [])
-    ALL_KNOWN_TOKENS = set(HEADER_TOKENS) | set(ROW_TOKENS) | set(TOTALS.keys()) | set(LITERALS.keys()) | UNRESOLVED_TOKENS
+    # Blank any remaining known tokens
+    ALL_KNOWN_TOKENS = set(HEADER_TOKENS) | set(ROW_TOKENS) | set(TOTALS.keys()) | set(LITERALS.keys())
     html_multi = blank_known_tokens(html_multi, ALL_KNOWN_TOKENS)
 
     # Strip internal BATCH markers — they are pipeline internals and must not leak into output

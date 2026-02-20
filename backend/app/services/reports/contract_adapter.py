@@ -112,8 +112,8 @@ def format_fixed_decimals(value: Any, decimals: int, max_decimals: int = 3) -> s
     if rounded == 0:
         rounded = Decimal(0).quantize(quantizer, rounding=ROUND_HALF_UP) if decimals else Decimal(0)
     formatted = format(rounded, "f")
-    if rounded == 0 and formatted.startswith("-"):
-        formatted = formatted.lstrip("-")
+    if formatted.startswith("-0"):
+        formatted = format(Decimal(0).quantize(quantizer, rounding=ROUND_HALF_UP) if decimals else Decimal(0), "f")
     return formatted
 
 
@@ -359,26 +359,12 @@ class ContractAdapter:
                 return text
 
         fmt_map = {
-            # Date only
             "DD/MM/YYYY": "%d/%m/%Y",
             "YYYY-MM-DD": "%Y-%m-%d",
             "DD-MM-YYYY": "%d-%m-%Y",
             "MM/DD/YYYY": "%m/%d/%Y",
-            # Date + time
-            "YYYY-MM-DD HH:MM:SS": "%Y-%m-%d %H:%M:%S",
-            "YYYY-MM-DD HH:MM": "%Y-%m-%d %H:%M",
-            "DD/MM/YYYY HH:MM:SS": "%d/%m/%Y %H:%M:%S",
-            "DD/MM/YYYY HH:MM": "%d/%m/%Y %H:%M",
-            "MM/DD/YYYY HH:MM:SS": "%m/%d/%Y %H:%M:%S",
-            "DD-MM-YYYY HH:MM:SS": "%d-%m-%Y %H:%M:%S",
-            # ISO 8601
-            "ISO": "%Y-%m-%dT%H:%M:%S",
-            "ISO8601": "%Y-%m-%dT%H:%M:%S",
         }
-        fmt_upper = fmt.upper()
-        # Smart fallback: include time if the format string mentions hours
-        fallback = "%Y-%m-%d %H:%M:%S" if "HH" in fmt_upper else "%Y-%m-%d"
-        pattern = fmt_map.get(fmt_upper, fallback)
+        pattern = fmt_map.get(fmt.upper(), "%Y-%m-%d")
         return dt.strftime(pattern)
 
     @staticmethod
@@ -421,49 +407,13 @@ class ContractAdapter:
         if start_dt is None and end_dt is None:
             return df
 
-        before_count = len(df)
         dt_series = _coerce_datetime_series(df[date_col])
-
-        # Safety net: if >80% of values failed to parse as dates, the column
-        # is almost certainly not a real date column.  Skip filtering to avoid
-        # silently dropping all rows.
-        if len(dt_series) > 0:
-            nat_ratio = dt_series.isna().sum() / len(dt_series)
-            if nat_ratio > 0.8:
-                logger.warning(
-                    "date_filter_skipped_high_nat_ratio",
-                    extra={
-                        "event": "date_filter_skipped_high_nat_ratio",
-                        "table": table,
-                        "date_col": date_col,
-                        "nat_ratio": round(float(nat_ratio), 3),
-                        "row_count": before_count,
-                    },
-                )
-                return df
-
         mask = pd.Series(True, index=df.index)
         if start_dt:
             mask = mask & (dt_series >= start_dt)
         if end_dt:
             mask = mask & (dt_series <= end_dt)
-        filtered = df.loc[mask.fillna(False)]
-
-        after_count = len(filtered)
-        if before_count > 0 and after_count == 0:
-            logger.warning(
-                "date_filter_dropped_all_rows",
-                extra={
-                    "event": "date_filter_dropped_all_rows",
-                    "table": table,
-                    "date_col": date_col,
-                    "before_count": before_count,
-                    "start_date": start_date,
-                    "end_date": end_date,
-                },
-            )
-
-        return filtered
+        return df.loc[mask.fillna(False)]
 
     def _apply_value_filters_df(self, df, value_filters: Dict[str, list]):
         """Apply equality filters from contract optional_filters."""
@@ -755,35 +705,9 @@ class ContractAdapter:
                     except Exception:
                         pass
 
-            # 4. Fallback — column not found in DataFrame
+            # 4. Fallback
             if not resolved:
-                mapping_expr = self._mapping.get(tok, "")
-                logger.warning(
-                    "row_token_unresolved",
-                    extra={
-                        "event": "row_token_unresolved",
-                        "token": tok,
-                        "mapping": mapping_expr,
-                        "source_table": source_table,
-                    },
-                )
                 result_cols[tok] = ""
-
-        # Normalize: ensure every value is array-like so pd.DataFrame()
-        # never receives an all-scalar dict (which raises ValueError).
-        # Determine the target length from the source DataFrame.
-        _target_len = len(df) if not df.empty else 1
-        for _k, _v in result_cols.items():
-            if isinstance(_v, (pd.Series, list)):
-                continue  # already array-like
-            try:
-                import numpy as _np
-                if isinstance(_v, _np.ndarray):
-                    continue
-            except ImportError:
-                pass
-            # Scalar or empty string — broadcast to match row count
-            result_cols[_k] = [_v] * _target_len
 
         result_df = pd.DataFrame(result_cols)
 

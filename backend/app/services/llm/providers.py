@@ -294,9 +294,6 @@ class ClaudeCodeCLIProvider(BaseProvider):
         )
 
         start_time = time.time()
-        import os as _os
-        prompt_file: str | None = None
-        proc: subprocess.Popen | None = None
         try:
             # Use a temp file for the prompt to handle large inputs
             with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
@@ -305,61 +302,44 @@ class ClaudeCodeCLIProvider(BaseProvider):
 
             # Run claude CLI with prompt from stdin
             # Explicitly unset CLAUDECODE to avoid conflicts when running nested CLI calls
-            env = _os.environ.copy()
+            import os as _env_os
+            env = _env_os.environ.copy()
             env.pop('CLAUDECODE', None)
 
-            # Use Popen for explicit control over timeout, kill, and cleanup.
-            pf = open(prompt_file, 'r', encoding='utf-8')
-            try:
-                proc = subprocess.Popen(
+            with open(prompt_file, 'r', encoding='utf-8') as pf:
+                result = subprocess.run(
                     cmd,
                     stdin=pf,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    capture_output=True,
                     text=True,
+                    timeout=self.config.timeout_seconds,
                     env=env,
                 )
-                stdout, stderr = proc.communicate(timeout=self.config.timeout_seconds)
-            except subprocess.TimeoutExpired:
-                # Graceful escalation: SIGTERM → wait 5s → SIGKILL
-                if proc is not None:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                        proc.wait()
-                elapsed = time.time() - start_time
-                logger.error(
-                    "claude_code_cli_timeout",
-                    extra={
-                        "event": "claude_code_cli_timeout",
-                        "model": model,
-                        "timeout_seconds": self.config.timeout_seconds,
-                        "elapsed_seconds": round(elapsed, 2),
-                    },
-                )
-                raise RuntimeError(
-                    f"Claude Code CLI timed out after {self.config.timeout_seconds}s"
-                )
-            finally:
-                pf.close()
 
-            if proc.returncode != 0:
-                stderr_msg = (stderr or "").strip()
-                stdout_msg = (stdout or "").strip()
+            # Clean up temp files
+            import os as _os
+            _os.unlink(prompt_file)
+            for img_path in image_files:
+                try:
+                    _os.unlink(img_path)
+                except Exception:
+                    pass
+
+            if result.returncode != 0:
+                stderr_msg = (result.stderr or "").strip()
+                stdout_msg = (result.stdout or "").strip()
                 # Claude CLI often writes errors to stdout, not stderr
-                error_msg = stderr_msg or stdout_msg or f"Claude CLI exited with code {proc.returncode}"
+                error_msg = stderr_msg or stdout_msg or f"Claude CLI exited with code {result.returncode}"
                 # Truncate to avoid enormous log entries
                 if len(error_msg) > 500:
                     error_msg = error_msg[:500] + "..."
                 logger.error(
                     "claude_code_cli_error",
-                    extra={"event": "claude_code_cli_error", "error": error_msg, "returncode": proc.returncode}
+                    extra={"event": "claude_code_cli_error", "error": error_msg, "returncode": result.returncode}
                 )
                 raise RuntimeError(f"Claude Code CLI error: {error_msg}")
 
-            content = stdout.strip()
+            content = result.stdout.strip()
             elapsed = time.time() - start_time
 
             logger.info(
@@ -394,26 +374,16 @@ class ClaudeCodeCLIProvider(BaseProvider):
                 }
             }
 
-        except RuntimeError:
-            raise
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"Claude Code CLI timed out after {self.config.timeout_seconds} seconds"
+            )
         except Exception as e:
             logger.error(
                 "claude_code_cli_failed",
                 extra={"event": "claude_code_cli_failed", "error": _sanitize_error(e)}
             )
             raise
-        finally:
-            # Always clean up temp files, even on timeout or error
-            if prompt_file:
-                try:
-                    _os.unlink(prompt_file)
-                except OSError:
-                    pass
-            for img_path in image_files:
-                try:
-                    _os.unlink(img_path)
-                except OSError:
-                    pass
 
     def chat_completion_stream(
         self,

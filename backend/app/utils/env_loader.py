@@ -48,7 +48,22 @@ def load_env_file() -> Path | None:
             _apply_env_file(resolved)
             logger.info("loaded_env_file", extra={"event": "loaded_env_file", "path": str(resolved)})
             return resolved
-        except Exception:  # pragma: no cover - defensive logging only
+        except PermissionError:
+            logger.warning(
+                "env_file_permission_denied",
+                extra={"event": "env_file_permission_denied", "path": str(candidate)},
+            )
+        except UnicodeDecodeError as e:
+            logger.warning(
+                "env_file_encoding_error",
+                extra={"event": "env_file_encoding_error", "path": str(candidate), "detail": str(e)},
+            )
+        except (ValueError, SyntaxError) as e:
+            logger.warning(
+                "env_file_parse_error",
+                extra={"event": "env_file_parse_error", "path": str(candidate), "detail": str(e)},
+            )
+        except Exception:  # pragma: no cover - defensive fallback
             logger.exception(
                 "env_file_load_failed",
                 extra={"event": "env_file_load_failed", "path": str(candidate)},
@@ -57,7 +72,8 @@ def load_env_file() -> Path | None:
 
 
 def _apply_env_file(path: Path) -> None:
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for line_num, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -65,9 +81,15 @@ def _apply_env_file(path: Path) -> None:
             line = line[7:].lstrip()
         if "=" not in line:
             continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = _strip_quotes(value.strip())
-        if not key or key.startswith("#"):
-            continue
-        os.environ.setdefault(key, value)
+        try:
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = _strip_quotes(value.strip())
+            if not key or key.startswith("#"):
+                continue
+            os.environ.setdefault(key, value)
+        except Exception as e:
+            logger.warning(
+                "env_file_bad_line",
+                extra={"event": "env_file_bad_line", "path": str(path), "line": line_num, "detail": str(e)},
+            )

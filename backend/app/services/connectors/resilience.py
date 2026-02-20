@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 from functools import wraps
 from typing import Any, Callable, Optional, Tuple, Type, TypeVar
 
@@ -128,6 +129,7 @@ def with_retry(
     jitter: bool = True,
     retry_on: Optional[Tuple[Type[Exception], ...]] = None,
     on_retry: Optional[Callable[[Exception, int], None]] = None,
+    health: Optional[ConnectionHealth] = None,
 ):
     """
     Decorator for database operations with retry logic.
@@ -161,10 +163,23 @@ def with_retry(
             last_exception: Optional[Exception] = None
 
             for attempt in range(1, max_attempts + 1):
+                # Circuit breaker check
+                if health is not None and not health.allow_request():
+                    raise ConnectionError(
+                        f"Circuit breaker open for {func.__name__}: "
+                        f"{health.consecutive_failures} consecutive failures, "
+                        f"last error: {health.last_error}"
+                    )
+
                 try:
-                    return await func(*args, **kwargs)
+                    result = await func(*args, **kwargs)
+                    if health is not None:
+                        health.record_success(0)
+                    return result
                 except Exception as e:
                     last_exception = e
+                    if health is not None:
+                        health.record_failure(e)
 
                     # Check if this is a permanent error
                     if is_permanent_error(e):
@@ -218,14 +233,26 @@ def with_retry(
 
         @wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> T:
-            import time
             last_exception: Optional[Exception] = None
 
             for attempt in range(1, max_attempts + 1):
+                # Circuit breaker check
+                if health is not None and not health.allow_request():
+                    raise ConnectionError(
+                        f"Circuit breaker open for {func.__name__}: "
+                        f"{health.consecutive_failures} consecutive failures, "
+                        f"last error: {health.last_error}"
+                    )
+
                 try:
-                    return func(*args, **kwargs)
+                    result = func(*args, **kwargs)
+                    if health is not None:
+                        health.record_success(0)
+                    return result
                 except Exception as e:
                     last_exception = e
+                    if health is not None:
+                        health.record_failure(e)
 
                     # Check if this is a permanent error
                     if is_permanent_error(e):
@@ -291,29 +318,87 @@ def with_retry(
 # =============================================================================
 
 class ConnectionHealth:
-    """Track connection health metrics."""
+    """Track connection health metrics with circuit breaker behaviour.
 
-    def __init__(self):
+    When ``consecutive_failures`` reaches ``failure_threshold`` the circuit
+    *opens* and ``allow_request()`` returns ``False``.  After
+    ``cooldown_seconds`` the circuit moves to *half-open*, allowing one
+    probe request through.  A success closes the circuit; a failure
+    re-opens it.
+    """
+
+    def __init__(
+        self,
+        *,
+        failure_threshold: int = 5,
+        cooldown_seconds: float = 60.0,
+    ):
         self.total_requests: int = 0
         self.successful_requests: int = 0
         self.failed_requests: int = 0
         self.total_latency_ms: float = 0.0
         self.consecutive_failures: int = 0
         self.last_error: Optional[str] = None
+        # Circuit breaker state
+        self._failure_threshold = failure_threshold
+        self._cooldown_seconds = cooldown_seconds
+        self._circuit_opened_at: Optional[float] = None
+        self._half_open: bool = False
 
     def record_success(self, latency_ms: float) -> None:
-        """Record a successful operation."""
+        """Record a successful operation.  Closes circuit if half-open."""
         self.total_requests += 1
         self.successful_requests += 1
         self.total_latency_ms += latency_ms
         self.consecutive_failures = 0
+        self._circuit_opened_at = None
+        self._half_open = False
 
     def record_failure(self, error: Exception) -> None:
-        """Record a failed operation."""
+        """Record a failed operation.  Opens circuit when threshold reached."""
         self.total_requests += 1
         self.failed_requests += 1
         self.consecutive_failures += 1
         self.last_error = str(error)
+        if (
+            self.consecutive_failures >= self._failure_threshold
+            and self._circuit_opened_at is None
+        ):
+            self._circuit_opened_at = time.monotonic()
+            self._half_open = False
+            logger.info(
+                f"Circuit opened after {self.consecutive_failures} consecutive failures"
+            )
+
+    def allow_request(self) -> bool:
+        """Return ``True`` if a request should be allowed through.
+
+        * Circuit closed → always allow
+        * Circuit open, cooldown not expired → deny
+        * Circuit open, cooldown expired → half-open, allow one probe
+        """
+        if self._circuit_opened_at is None:
+            return True
+
+        elapsed = time.monotonic() - self._circuit_opened_at
+        if elapsed >= self._cooldown_seconds:
+            if not self._half_open:
+                self._half_open = True
+                logger.info("Circuit half-open, allowing probe request")
+                return True
+            return False
+
+        return False
+
+    @property
+    def circuit_state(self) -> str:
+        """Return the current circuit breaker state."""
+        if self._circuit_opened_at is None:
+            return "closed"
+        elapsed = time.monotonic() - self._circuit_opened_at
+        if elapsed >= self._cooldown_seconds:
+            return "half_open"
+        return "open"
 
     @property
     def success_rate(self) -> float:
@@ -342,6 +427,7 @@ class ConnectionHealth:
         """Convert health metrics to dictionary."""
         return {
             "status": self.status,
+            "circuit_state": self.circuit_state,
             "total_requests": self.total_requests,
             "successful_requests": self.successful_requests,
             "failed_requests": self.failed_requests,

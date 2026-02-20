@@ -645,6 +645,80 @@ class AgentTaskRepository:
             logger.info(f"Claimed retry for task {task_id} (attempt {task.attempt_count})")
             return task
 
+    def claim_batch(
+        self,
+        *,
+        limit: int = 5,
+        exclude_task_ids: Optional[set] = None,
+    ) -> List[AgentTaskModel]:
+        """Atomically claim up to ``limit`` PENDING tasks.
+
+        Eliminates the TOCTOU race between list_pending_tasks() and
+        claim_task() by selecting and claiming within one session.
+
+        Args:
+            limit: Maximum number of tasks to claim
+            exclude_task_ids: Task IDs to skip (already running in-process)
+
+        Returns:
+            List of successfully claimed AgentTaskModel instances
+        """
+        started_at = _utc_now()
+        exclude = exclude_task_ids or set()
+
+        with self._session() as session:
+            candidates = list(
+                session.exec(
+                    select(AgentTaskModel)
+                    .where(AgentTaskModel.status == AgentTaskStatus.PENDING)
+                    .order_by(
+                        AgentTaskModel.priority.desc(),
+                        AgentTaskModel.created_at.asc(),
+                    )
+                    .limit(limit + len(exclude))
+                ).all()
+            )
+
+            claimed: List[AgentTaskModel] = []
+            for task in candidates:
+                if task.task_id in exclude:
+                    continue
+                if len(claimed) >= limit:
+                    break
+
+                result = session.execute(
+                    text(
+                        "UPDATE agent_tasks "
+                        "SET status = :running, started_at = :started_at, "
+                        "attempt_count = attempt_count + 1, version = version + 1 "
+                        "WHERE task_id = :task_id AND status = :pending"
+                    ),
+                    {
+                        "running": AgentTaskStatus.RUNNING.name,
+                        "started_at": started_at,
+                        "task_id": task.task_id,
+                        "pending": AgentTaskStatus.PENDING.name,
+                    },
+                )
+
+                if result.rowcount == 1:
+                    session.expire(task)
+                    refreshed = session.get(AgentTaskModel, task.task_id)
+                    if refreshed:
+                        self._log_event(
+                            session,
+                            task.task_id,
+                            "started",
+                            previous_status=AgentTaskStatus.PENDING.value,
+                            new_status=AgentTaskStatus.RUNNING.value,
+                            data={"attempt": refreshed.attempt_count, "batch_claim": True},
+                        )
+                        claimed.append(refreshed)
+
+            if claimed:
+                logger.info(f"Batch-claimed {len(claimed)} task(s)")
+            return claimed
+
     def update_progress(
         self,
         task_id: str,

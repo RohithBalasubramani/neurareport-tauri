@@ -24,10 +24,10 @@ class PostgresDataFrameLoader:
     """Load PostgreSQL tables into cached pandas DataFrames."""
 
     def __init__(self, connection_url: str, row_limit: int = DEFAULT_ROW_LIMIT):
-        self.connection_url = _normalize_pg_url(connection_url)
+        self.connection_url = connection_url
         self.row_limit = row_limit
         self._engine = create_engine(
-            self.connection_url,
+            connection_url,
             connect_args={"connect_timeout": 10},
             pool_pre_ping=True,
             pool_size=2,
@@ -255,24 +255,8 @@ class PostgresDataFrameLoader:
             pass
 
 
-def _normalize_pg_url(url: str) -> str:
-    """Ensure the URL has the ``://`` scheme separator SQLAlchemy requires.
-
-    Some stored URLs use ``postgresql:/user@...`` (single slash) or even
-    ``postgresql:user@...`` (no slash) instead of ``postgresql://user@...``.
-    """
-    import re
-    m = re.match(r"^(postgres(?:ql)?):(/*)(.*)$", url)
-    if m:
-        scheme, slashes, rest = m.groups()
-        if len(slashes) < 2:
-            return f"{scheme}://{rest}"
-    return url
-
-
 def verify_postgres(connection_url: str) -> None:
     """Verify a PostgreSQL database is accessible by running SELECT 1."""
-    connection_url = _normalize_pg_url(connection_url)
     engine = create_engine(connection_url, connect_args={"connect_timeout": 5})
     try:
         with engine.connect() as conn:

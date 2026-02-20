@@ -8,16 +8,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
-import math
-
-from pydantic import BaseModel, Field, field_validator
-
-
-def _sanitize_float(v: float, default: float = 0.0) -> float:
-    """Replace NaN/Infinity with a safe default before JSON serialization."""
-    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-        return default
-    return v
+from pydantic import BaseModel, Field
 
 
 class DataPoint(BaseModel):
@@ -26,11 +17,6 @@ class DataPoint(BaseModel):
     index: Optional[int] = None
     value: float
     label: Optional[str] = None
-
-    @field_validator("value", mode="before")
-    @classmethod
-    def _clamp_value(cls, v: float) -> float:
-        return _sanitize_float(v)
 
 
 class DataSeries(BaseModel):
@@ -134,11 +120,6 @@ class ForecastPoint(BaseModel):
     lower_bound: float
     upper_bound: float
 
-    @field_validator("predicted", "lower_bound", "upper_bound", mode="before")
-    @classmethod
-    def _clamp_bounds(cls, v: float) -> float:
-        return _sanitize_float(v)
-
 
 class TrendRequest(BaseModel):
     """Request for trend analysis and forecasting."""
@@ -189,11 +170,6 @@ class Anomaly(BaseModel):
     expected_value: float
     deviation: float  # Standard deviations from expected
     description: str
-
-    @field_validator("value", "expected_value", "deviation", mode="before")
-    @classmethod
-    def _clamp_anomaly(cls, v: float) -> float:
-        return _sanitize_float(v)
     possible_causes: List[str] = Field(default_factory=list)
 
 
@@ -244,16 +220,6 @@ class CorrelationPair(BaseModel):
     strength: CorrelationStrength
     significant: bool
     description: str
-
-    @field_validator("correlation", mode="before")
-    @classmethod
-    def _clamp_corr(cls, v: float) -> float:
-        return _sanitize_float(v)
-
-    @field_validator("p_value", mode="before")
-    @classmethod
-    def _clamp_pval(cls, v: float) -> float:
-        return _sanitize_float(v, default=1.0)
 
 
 class CorrelationsRequest(BaseModel):

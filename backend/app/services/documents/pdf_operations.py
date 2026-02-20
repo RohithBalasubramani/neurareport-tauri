@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import uuid
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -64,8 +65,72 @@ class PDFOperationsService:
         self._output_dir = output_dir or (base_root / "pdf_outputs")
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
+    def _validate_pdf_input(
+        self,
+        pdf_path: Path,
+        *,
+        required_pages: Optional[list[int]] = None,
+        operation: str = "process",
+    ) -> None:
+        """Validate a PDF file before performing operations.
+
+        Centralizes file-existence, readability, corruption, and page-bounds
+        checks that previously failed deep inside PyMuPDF with opaque errors.
+
+        Args:
+            pdf_path: Path to the PDF file
+            required_pages: If specified, validate these page numbers exist
+            operation: Name of the operation (for error messages)
+
+        Raises:
+            FileNotFoundError: If the file does not exist
+            PermissionError: If the file is not readable
+            ValueError: If the file is not a valid PDF or pages are out of range
+        """
+        if not pdf_path.exists():
+            raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+
+        if not os.access(pdf_path, os.R_OK):
+            raise PermissionError(f"PDF file not readable: {pdf_path}")
+
+        if pdf_path.stat().st_size == 0:
+            raise ValueError(f"PDF file is empty: {pdf_path}")
+
+        # Validate PDF header
+        try:
+            with open(pdf_path, "rb") as f:
+                header = f.read(5)
+                if header != b"%PDF-":
+                    raise ValueError(
+                        f"File does not appear to be a valid PDF (bad header): {pdf_path}"
+                    )
+        except (OSError, IOError) as e:
+            raise ValueError(f"Cannot read PDF file: {pdf_path}: {e}") from e
+
+        # Validate page numbers if specified
+        if required_pages is not None:
+            import fitz
+            doc = None
+            try:
+                doc = fitz.open(str(pdf_path))
+                total = doc.page_count
+                for page_num in required_pages:
+                    if page_num < 0 or page_num >= total:
+                        raise ValueError(
+                            f"Page {page_num} out of range for {operation} "
+                            f"(PDF has {total} pages, valid range: 0-{total - 1})"
+                        )
+            except ValueError:
+                raise
+            except Exception as e:
+                raise ValueError(f"Cannot open PDF for validation: {pdf_path}: {e}") from e
+            finally:
+                if doc:
+                    doc.close()
+
     def get_page_info(self, pdf_path: Path) -> list[PageInfo]:
         """Get information about all pages in a PDF."""
+        self._validate_pdf_input(pdf_path, operation="get_page_info")
         import fitz  # PyMuPDF
 
         doc = None
@@ -95,6 +160,7 @@ class PDFOperationsService:
         output_path: Optional[Path] = None,
     ) -> Path:
         """Reorder pages in a PDF according to new_order list."""
+        self._validate_pdf_input(pdf_path, required_pages=new_order, operation="reorder_pages")
         import fitz
 
         doc = None
@@ -136,6 +202,7 @@ class PDFOperationsService:
         output_path: Optional[Path] = None,
     ) -> Path:
         """Add a watermark to all pages of a PDF."""
+        self._validate_pdf_input(pdf_path, operation="add_watermark")
         import fitz
 
         doc = None
@@ -201,6 +268,7 @@ class PDFOperationsService:
         output_path: Optional[Path] = None,
     ) -> Path:
         """Redact specified regions in a PDF."""
+        self._validate_pdf_input(pdf_path, operation="redact_regions")
         import fitz
 
         doc = None
@@ -254,8 +322,10 @@ class PDFOperationsService:
             source_files = []
 
             for pdf_path in pdf_paths:
-                if not pdf_path.exists():
-                    logger.warning(f"PDF not found, skipping: {pdf_path}")
+                try:
+                    self._validate_pdf_input(pdf_path, operation="merge_pdfs")
+                except (FileNotFoundError, PermissionError, ValueError) as e:
+                    logger.warning(f"Skipping invalid PDF in merge: {e}")
                     continue
 
                 doc = None
@@ -294,6 +364,7 @@ class PDFOperationsService:
         output_dir: Optional[Path] = None,
     ) -> list[Path]:
         """Split a PDF into multiple files based on page ranges."""
+        self._validate_pdf_input(pdf_path, operation="split_pdf")
         import fitz
 
         doc = None
@@ -340,6 +411,7 @@ class PDFOperationsService:
         output_path: Optional[Path] = None,
     ) -> Path:
         """Rotate pages in a PDF."""
+        self._validate_pdf_input(pdf_path, operation="rotate_pages")
         import fitz
 
         doc = None
@@ -380,6 +452,7 @@ class PDFOperationsService:
         output_path: Optional[Path] = None,
     ) -> Path:
         """Extract specific pages from a PDF."""
+        self._validate_pdf_input(pdf_path, operation="extract_pages")
         import fitz
 
         doc = None

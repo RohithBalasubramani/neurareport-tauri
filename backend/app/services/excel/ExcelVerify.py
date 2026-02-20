@@ -59,88 +59,6 @@ def _row_has_values(values) -> bool:
     return False
 
 
-def _is_numeric_cell(text: str) -> bool:
-    """Check if a cell value is purely numeric."""
-    try:
-        float(text.replace(",", ""))
-        return True
-    except ValueError:
-        return False
-
-
-def _is_sequential_numbers(cells: list[str]) -> bool:
-    """Check if cells are sequential integers (1,2,3,4...)."""
-    if len(cells) < 3:
-        return False
-    try:
-        nums = [int(float(c)) for c in cells]
-        return nums == list(range(nums[0], nums[0] + len(nums)))
-    except (ValueError, TypeError):
-        return False
-
-
-def _detect_header_row(
-    rows: list[tuple],
-    *,
-    max_scan: int = 10,
-    db_column_names: set[str] | None = None,
-) -> int:
-    """Score rows 0..max_scan and return the index of the best header row.
-
-    Signals used:
-      1. Unique text count — headers have many distinct labels
-      2. All-numeric penalty — rows of just numbers are data
-      3. Sequential number penalty — "1, 2, 3, 4..." is a numbering row
-      4. DB column name match — cell text matching DB columns = likely header
-      5. Merged-cell penalty — title rows have few cells spanning many columns
-      6. Row position bonus — slight preference for rows 2-5 over row 0
-    """
-    best_index = -1
-    best_score = float("-inf")
-
-    for idx, row in enumerate(rows[:max_scan]):
-        if not _row_has_values(row):
-            continue
-        cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
-        if not cells:
-            continue
-        score = 0.0
-
-        # Signal 1: Unique text count
-        unique_text = len(set(c.lower() for c in cells))
-        score += min(unique_text, 15) * 2.0
-
-        # Signal 2: All-numeric penalty
-        numeric_count = sum(1 for c in cells if _is_numeric_cell(c))
-        if len(cells) > 0 and numeric_count / len(cells) > 0.8:
-            score -= 20.0
-
-        # Signal 3: Sequential number penalty
-        if _is_sequential_numbers(cells):
-            score -= 15.0
-
-        # Signal 4: DB column name match
-        if db_column_names:
-            matches = sum(1 for c in cells if _normalize_token(c) in db_column_names)
-            score += matches * 5.0
-
-        # Signal 5: Merged-cell penalty
-        non_empty = len(cells)
-        total_cols = len(row)
-        if total_cols > 3 and non_empty <= 2:
-            score -= 10.0
-
-        # Signal 6: Row position bonus
-        if 1 <= idx <= 5:
-            score += 1.0
-
-        if score > best_score:
-            best_score = score
-            best_index = idx
-
-    return best_index if best_index >= 0 else 0
-
-
 def _ensure_label(value: object, idx: int) -> str:
     if value not in (None, ""):
         text = str(value).strip()
@@ -174,11 +92,16 @@ def _build_placeholder_samples(tokens: list[str], data_row: list[str]) -> dict[s
     return samples
 
 
-def _sheet_snapshot_for_llm(sheet, *, max_rows: int = 20, max_preface_rows: int = 6, db_column_names: set[str] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[str], int]:
+def _sheet_snapshot_for_llm(sheet, *, max_rows: int = 20, max_preface_rows: int = 6) -> tuple[dict[str, Any], list[dict[str, Any]], list[str], int]:
     rows = list(sheet.iter_rows(values_only=True))
-    header_index = _detect_header_row(rows, db_column_names=db_column_names)
-    header_row = rows[header_index] if header_index < len(rows) else []
-    if not header_row or not _row_has_values(header_row):
+    header_row = None
+    header_index = -1
+    for idx, row in enumerate(rows):
+        if _row_has_values(row):
+            header_row = row
+            header_index = idx
+            break
+    if header_row is None:
         header_row = []
         header_index = -1
 
@@ -245,10 +168,15 @@ def _sheet_snapshot_for_llm(sheet, *, max_rows: int = 20, max_preface_rows: int 
     return snapshot, token_plan, first_data_row, data_row_count
 
 
-def _sheet_to_placeholder_html(sheet, *, db_column_names: set[str] | None = None) -> tuple[str, list[str], list[str]]:
+def _sheet_to_placeholder_html(sheet) -> tuple[str, list[str], list[str]]:
     rows = list(sheet.iter_rows(values_only=True))
-    header_index = _detect_header_row(rows, db_column_names=db_column_names)
-    header_row = rows[header_index] if header_index < len(rows) else None
+    header_row = None
+    header_index = -1
+    for idx, row in enumerate(rows):
+        if _row_has_values(row):
+            header_row = row
+            header_index = idx
+            break
 
     placeholder_tokens: list[str] = []
     if header_row:
@@ -334,16 +262,22 @@ def _request_excel_llm_template(snapshot: dict[str, Any], sheet_html: str, schem
     return html_clean, schema_doc
 
 
-def _sheet_to_reference_html(sheet, *, max_rows: int = 5, db_column_names: set[str] | None = None) -> str:
+def _sheet_to_reference_html(sheet, *, max_rows: int = 5) -> str:
     """
     Build a data-only HTML snapshot of the original Excel sheet (no placeholders),
-    using the detected header row and up to `max_rows` subsequent data rows.
+    using the first non-empty row as header and up to `max_rows` subsequent data rows.
     This serves as the reference image for fidelity preview and LLM context.
     """
     rows = list(sheet.iter_rows(values_only=True))
-    header_index = _detect_header_row(rows, db_column_names=db_column_names)
-    header_row = rows[header_index] if header_index < len(rows) else []
-    if not header_row or not _row_has_values(header_row):
+
+    header_row = None
+    header_index = -1
+    for i, row in enumerate(rows):
+        if _row_has_values(row):
+            header_row = row
+            header_index = i
+            break
+    if header_row is None:
         header_row = []
         header_index = -1
 
@@ -402,38 +336,21 @@ def xlsx_to_html_preview(
     out_dir.mkdir(parents=True, exist_ok=True)
     wb = openpyxl.load_workbook(filename=str(excel_path), data_only=True)
     sheet = wb.active
-    # The LLM only needs a small sample of rows to understand the template
-    # structure, so we cap the *snapshot* at LLM_SAMPLE_ROWS.  The overall
-    # file acceptance limit (EXCEL_MAX_DATA_ROWS) is kept much higher so
-    # that normal-sized spreadsheets are not rejected.
-    LLM_SAMPLE_ROWS = 30  # rows sent to the LLM for template analysis
+    # Enforce a simple safety/UX constraint for initial Excel uploads:
+    # Limit the number of non-empty data rows to a maximum (default 30).
+    # If exceeded, ask the user to delete extra rows and re-upload.
     try:
-        max_rows_env = os.getenv("EXCEL_MAX_DATA_ROWS", "500").strip()
-        MAX_DATA_ROWS = int(max_rows_env) if max_rows_env else 500
+        max_rows_env = os.getenv("EXCEL_MAX_DATA_ROWS", "30").strip()
+        MAX_DATA_ROWS = int(max_rows_env) if max_rows_env else 30
     except Exception:
-        MAX_DATA_ROWS = 500
+        MAX_DATA_ROWS = 30
 
-    # Build DB column name set for header detection scoring
-    db_col_names: set[str] | None = None
-    if db_path:
-        try:
-            from backend.legacy.utils.connection_utils import get_loader_for_ref
-            loader = get_loader_for_ref(db_path)
-            db_col_names = set()
-            for t in loader.table_names():
-                for col_info in loader.pragma_table_info(t):
-                    name = col_info.get("name", "") if isinstance(col_info, dict) else ""
-                    if name:
-                        db_col_names.add(_normalize_token(name))
-        except Exception:
-            logger.debug("excel_db_col_names_unavailable", extra={"db_path": str(db_path)})
-
-    snapshot, token_plan, first_data_row, data_row_count = _sheet_snapshot_for_llm(sheet, max_rows=LLM_SAMPLE_ROWS, db_column_names=db_col_names)
-    sheet_prototype_html, placeholder_tokens, placeholder_first_row = _sheet_to_placeholder_html(sheet, db_column_names=db_col_names)
+    snapshot, token_plan, first_data_row, data_row_count = _sheet_snapshot_for_llm(sheet, max_rows=MAX_DATA_ROWS)
+    sheet_prototype_html, placeholder_tokens, placeholder_first_row = _sheet_to_placeholder_html(sheet)
     if data_row_count > MAX_DATA_ROWS:
         raise RuntimeError(
             f"Excel verification failed: found {data_row_count} data rows; maximum allowed is {MAX_DATA_ROWS}. "
-            "Please reduce the number of rows and upload the file again."
+            "Please delete extra rows and upload the file again."
         )
 
     placeholder_sample_map = _build_placeholder_samples(
@@ -493,7 +410,7 @@ def xlsx_to_html_preview(
     sample_rows_path.write_text(json.dumps(sample_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # Build a data-only reference HTML to snapshot the original Excel content
-    reference_html = _sheet_to_reference_html(sheet, max_rows=MAX_DATA_ROWS, db_column_names=db_col_names)
+    reference_html = _sheet_to_reference_html(sheet, max_rows=MAX_DATA_ROWS)
     reference_html_path = out_dir / "reference_p1.html"
     reference_html_path.write_text(reference_html, encoding="utf-8")
 

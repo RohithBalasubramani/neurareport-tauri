@@ -75,5 +75,6 @@ def write_json_atomic(
         indent=indent,
         ensure_ascii=ensure_ascii,
         sort_keys=sort_keys,
+        default=str,
     )
     write_text_atomic(path, data, encoding=encoding, step=step)

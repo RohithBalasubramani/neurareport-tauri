@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from backend.app.repositories.dataframes.sqlite_loader import get_loader
 from backend.legacy.utils.connection_utils import get_loader_for_ref
 from collections import defaultdict
@@ -18,20 +17,8 @@ REPORT_SELECTED_DISPLAY = "To Be Selected in report generator"
 UNRESOLVED_CHOICES = {UNRESOLVED, INPUT_SAMPLE, REPORT_SELECTED_VALUE}
 
 
-def _normalize_col(name: str) -> str:
-    """Normalize column/header name for comparison: lowercase, underscores."""
-    text = str(name or "").lower().strip()
-    text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
-    return text
-
-
-def _detect_measurement_table(
-    tables: list[str],
-    cols: Dict[str, list[str]],
-    header_hints: list[str] | None = None,
-) -> str | None:
-    """Return the best measurement table, scoring against header hints if provided."""
-    candidates: list[tuple[str, float]] = []
+def _detect_measurement_table(tables: list[str], cols: Dict[str, list[str]]) -> str | None:
+    """Return the name of a wide measurement table (e.g., neuract__Flowmeters) if present."""
     for table in tables:
         lower_name = table.lower()
         if "flowmeter" not in lower_name and "flowmeters" not in lower_name and not lower_name.startswith("neuract__"):
@@ -40,30 +27,12 @@ def _detect_measurement_table(
         if len(column_names) < 3:
             continue
         timestamp_like = any("timestamp" in c.lower() or c.lower().endswith("_utc") for c in column_names)
-        if not timestamp_like:
-            continue
-
-        score = 0.0
-        if header_hints:
-            col_norms = {_normalize_col(c) for c in column_names}
-            for hint in header_hints:
-                hint_norm = _normalize_col(hint)
-                if not hint_norm:
-                    continue
-                if hint_norm in col_norms:
-                    score += 10.0
-                elif any(hint_norm in cn or cn in hint_norm for cn in col_norms if len(cn) > 2):
-                    score += 3.0
-        candidates.append((table, score))
-
-    if not candidates:
-        return None
-    # Sort by score desc, then by table name for determinism
-    candidates.sort(key=lambda x: (-x[1], x[0]))
-    return candidates[0][0]
+        if timestamp_like:
+            return table
+    return None
 
 
-def get_parent_child_info(db_path, header_hints: list[str] | None = None) -> Dict[str, object]:
+def get_parent_child_info(db_path) -> Dict[str, object]:
     """Inspect the database and infer suitable parent/child tables.
 
     Behavior:
@@ -107,7 +76,7 @@ def get_parent_child_info(db_path, header_hints: list[str] | None = None) -> Dic
             cols[table] = []
 
     # Additional case: wide measurement tables (e.g., neuract__Flowmeters)
-    measurement_table = _detect_measurement_table(tables, cols, header_hints=header_hints)
+    measurement_table = _detect_measurement_table(tables, cols)
     if measurement_table:
         measurement_cols = cols.get(measurement_table, [])
         if not measurement_cols:

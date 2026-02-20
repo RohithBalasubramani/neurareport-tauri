@@ -540,15 +540,6 @@ LLM_CALL_4_SYSTEM_PROMPT_DF = dedent(
     - header_tokens: copy of tokens.scalars array.
     - row_tokens: copy of tokens.row_tokens array.
 
-    DATE_COLUMNS RULES:
-    - date_columns maps tables to their date/timestamp column for time-range filtering.
-    - ONLY use columns that store actual date/datetime/timestamp values (e.g. "2025-06-15", "2025-06-15T10:30:00").
-    - Valid names typically contain: 'date', 'timestamp', 'created_at', 'updated_at', 'time'.
-    - NEVER use 'id', primary keys, UUID columns, or integer/text columns that are NOT dates.
-    - If the rich_catalog is provided, check column types and sample values — only pick columns whose samples parse as dates.
-    - If a table has NO date/timestamp column, set date_columns to {} (empty object).
-    - When in doubt, prefer {} over guessing wrong — an empty date_columns is ALWAYS safe; a wrong one silently drops ALL data.
-
     ═══════════════════════════════════════════════════════════════
     INPUT PAYLOAD SHAPE:
     {
@@ -559,8 +550,7 @@ LLM_CALL_4_SYSTEM_PROMPT_DF = dedent(
       "mapping_override": { "<token>": "<authoritative mapping>" },
       "user_instructions": "<free-form user guidance>",
       "key_tokens": ["<required filter tokens>"],
-      "catalog": ["table.column", ...],
-      "rich_catalog": "<optional typed catalog with column types and sample values — use this for date_columns decisions>"
+      "catalog": ["table.column", ...]
     }
 
     ═══════════════════════════════════════════════════════════════
@@ -721,7 +711,6 @@ def build_llm_call_4_prompt(
     catalog: Iterable[str],
     dialect_hint: str | None = None,
     key_tokens: Iterable[str] | None = None,
-    rich_catalog_text: str | None = None,
 ) -> Dict[str, Any]:
     """
     Build the payload for LLM Call 4 (contract builder + overview).
@@ -750,8 +739,6 @@ def build_llm_call_4_prompt(
         payload["key_tokens"] = key_tokens_list
     if dialect_hint is not None:
         payload["dialect_hint"] = str(dialect_hint)
-    if rich_catalog_text:
-        payload["rich_catalog"] = rich_catalog_text
 
     payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
     messages = [

@@ -46,6 +46,8 @@ def main():
     os.environ.setdefault("NEURA_AGENT_WORKER_DISABLED", "true")
     os.environ.setdefault("NEURA_RECOVERY_DAEMON_DISABLED", "false")
     os.environ.setdefault("NEURA_SCHEDULER_DISABLED", "false")
+    os.environ.setdefault("NEURA_METRICS_ENABLED", "false")
+    os.environ.setdefault("NEURA_ALLOWED_HOSTS_ALL", "true")
     os.environ.setdefault("UPLOAD_ROOT", str(data_dir / "uploads"))
     os.environ.setdefault("EXCEL_UPLOAD_ROOT", str(data_dir / "uploads_excel"))
     os.environ.setdefault("NEURA_STATE_DIR", str(data_dir / "state"))

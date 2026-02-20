@@ -3,8 +3,15 @@ from __future__ import annotations
 import os
 from typing import Literal
 
-import fitz  # PyMuPDF
-from playwright.sync_api import sync_playwright
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    fitz = None
+
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    sync_playwright = None
 
 MM_PER_INCH = 25.4
 

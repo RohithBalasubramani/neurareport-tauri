@@ -1,7 +1,7 @@
 import axios from 'axios'
 import * as mock from './mock.js'
 import { getActiveIntent } from '@/utils/intentBridge'
-import { reportFrontendError } from './frontendErrorLogger'
+import { reportFrontendError, setErrorLoggerOrigin } from './frontendErrorLogger'
 import { isTauri, getTauriBackendUrl } from '@/utils/tauri'
 
 const runtimeEnv = {
@@ -57,6 +57,7 @@ export async function initApiForTauri() {
     _apiBase = tauriUrl
     _apiV1Base = `${tauriUrl}/api/v1`
     api.defaults.baseURL = _apiV1Base
+    setErrorLoggerOrigin(tauriUrl)
     console.log(`[tauri] API base URL set to: ${_apiV1Base}`)
   }
 }

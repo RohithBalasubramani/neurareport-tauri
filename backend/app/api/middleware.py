@@ -391,7 +391,7 @@ def add_middlewares(app: FastAPI, settings: Settings) -> None:
         # Note: allow_credentials=True is incompatible with allow_origins=["*"]
         app.add_middleware(
             CORSMiddleware,
-            allow_origin_regex=r"(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost|https://tauri\.localhost)",
+            allow_origin_regex=r"(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost|https?://tauri\.localhost)",
             allow_methods=cors_methods,
             allow_headers=cors_headers,
             allow_credentials=True,

@@ -65,6 +65,8 @@ jobs:
 
       - name: Build Tauri desktop app
         working-directory: frontend
+        env:
+          NODE_OPTIONS: '--max-old-space-size=8192'
         run: npx tauri build
 
       - name: Upload NSIS installer (.exe)
@@ -141,6 +143,8 @@ jobs:
 
       - name: Build Tauri desktop app
         working-directory: frontend
+        env:
+          NODE_OPTIONS: '--max-old-space-size=8192'
         run: npx tauri build
 
       - name: Upload .deb

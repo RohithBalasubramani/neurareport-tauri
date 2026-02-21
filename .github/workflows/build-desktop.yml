@@ -68,6 +68,71 @@ jobs:
       - name: Build backend sidecar (PyInstaller)
         run: python -m PyInstaller backend/neurareport-backend.spec --distpath frontend/src-tauri/ --noconfirm --clean
 
+      - name: Inspect sidecar binary contents
+        run: |
+          python -c "
+          import subprocess, sys, zipfile, struct
+          exe_path = 'frontend/src-tauri/neurareport-backend.exe'
+          # PyInstaller one-file EXEs have a PYZ archive embedded.
+          # Use pyi-archive_viewer in non-interactive mode to list TOC.
+          try:
+              from PyInstaller.archive.readers import CArchiveReader, ZlibArchiveReader
+              arch = CArchiveReader(exe_path)
+              toc_names = [name for name, *_ in arch.toc]
+              print(f'=== CArchive TOC: {len(toc_names)} entries ===')
+              # Check for our critical module
+              state_mods = [n for n in toc_names if 'repositories' in n or 'state_access' in n]
+              print(f'State/repo entries: {state_mods}')
+              # Check for PYZ
+              pyz_entries = [n for n in toc_names if n.endswith('.pyz')]
+              print(f'PYZ archives: {pyz_entries}')
+              # Try to read the PYZ and list backend modules
+              for pyz_name in pyz_entries:
+                  try:
+                      pyz_data = arch.extract(pyz_name)
+                      # Write to temp file to read
+                      import tempfile, os
+                      tmp = tempfile.NamedTemporaryFile(suffix='.pyz', delete=False)
+                      tmp.write(pyz_data)
+                      tmp.close()
+                      pyz = ZlibArchiveReader(tmp.name)
+                      pyz_mods = [name for name, *_ in pyz.toc]
+                      backend_mods = [m for m in pyz_mods if m.startswith('backend.')]
+                      print(f'=== PYZ has {len(pyz_mods)} total, {len(backend_mods)} backend modules ===')
+                      repo_mods = [m for m in backend_mods if 'repositor' in m or 'state_access' in m]
+                      print(f'Repo/state in PYZ: {repo_mods}')
+                      if 'backend.app.repositories.state' not in pyz_mods:
+                          print('!!! MISSING: backend.app.repositories.state NOT in PYZ !!!')
+                      else:
+                          print('OK: backend.app.repositories.state IS in PYZ')
+                      os.unlink(tmp.name)
+                  except Exception as e2:
+                      print(f'PYZ read error: {e2}')
+          except Exception as e:
+              print(f'Archive inspection error: {e}')
+              import traceback; traceback.print_exc()
+          "
+
+      - name: Test sidecar binary starts
+        shell: pwsh
+        timeout-minutes: 1
+        run: |
+          $proc = Start-Process -FilePath "frontend/src-tauri/neurareport-backend.exe" `
+            -ArgumentList "--port","19876" -PassThru -NoNewWindow -RedirectStandardError "sidecar_stderr.txt"
+          Start-Sleep -Seconds 15
+          try {
+            $response = Invoke-WebRequest -Uri "http://127.0.0.1:19876/health" -UseBasicParsing -TimeoutSec 5
+            Write-Host "Health check: $($response.Content)"
+          } catch {
+            Write-Host "Health check FAILED: $_"
+            if (Test-Path "sidecar_stderr.txt") {
+              Write-Host "=== STDERR ==="
+              Get-Content "sidecar_stderr.txt"
+            }
+          } finally {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Rename sidecar with target triple
         shell: pwsh
         run: |

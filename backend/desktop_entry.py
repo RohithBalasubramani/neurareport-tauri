@@ -38,6 +38,10 @@ def main():
     (data_dir / "uploads_excel").mkdir(exist_ok=True)
     (data_dir / "state").mkdir(exist_ok=True)
 
+    # Logs directory (writable location outside frozen bundle)
+    logs_dir = data_dir / "logs"
+    logs_dir.mkdir(exist_ok=True)
+
     # Desktop-mode environment defaults
     os.environ.setdefault("NEURA_DEBUG", "true")
     os.environ.setdefault("NEURA_ALLOW_ANON_API", "true")
@@ -51,6 +55,8 @@ def main():
     os.environ.setdefault("UPLOAD_ROOT", str(data_dir / "uploads"))
     os.environ.setdefault("EXCEL_UPLOAD_ROOT", str(data_dir / "uploads_excel"))
     os.environ.setdefault("NEURA_STATE_DIR", str(data_dir / "state"))
+    os.environ.setdefault("NEURA_ERROR_LOG", str(logs_dir / "backend_errors.log"))
+    os.environ.setdefault("NEURA_LLM_LOG", str(logs_dir / "llm.log"))
     os.environ.setdefault(
         "NEURA_DATABASE_URL",
         f"sqlite+aiosqlite:///{data_dir / 'state' / 'neurareport.db'}",

@@ -23,12 +23,23 @@ from backend.app.services.widget_intelligence.models.design import GridCell, Gri
 logger = logging.getLogger(__name__)
 
 
+def _estimate_rows(widgets: list[WidgetSlot], size_name_fn) -> int:
+    """Estimate the minimum rows needed to fit all widgets."""
+    total_cell_area = 0
+    for w in widgets:
+        sn = size_name_fn(w)
+        total_cell_area += SIZE_COLS.get(sn, SIZE_COLS["normal"]) * SIZE_ROWS.get(sn, SIZE_ROWS["normal"])
+    # Ceil-divide by column count, with a small buffer for packing gaps
+    min_rows = max(GRID_ROWS, -(-total_cell_area // GRID_COLS) + 2)
+    return min_rows
+
+
 def pack_grid(widgets: list[WidgetSlot]) -> GridLayout:
     """
-    Pack widgets into a 12×12 CSS grid.
+    Pack widgets into a 12×N CSS grid that expands vertically to fit.
 
     Returns GridLayout with non-overlapping, in-bounds cells.
-    Always succeeds — never needs iteration.
+    Always succeeds — the grid grows as needed.
     """
     if not widgets:
         return GridLayout()
@@ -36,6 +47,8 @@ def pack_grid(widgets: list[WidgetSlot]) -> GridLayout:
     def _size_name(widget: WidgetSlot) -> str:
         size = getattr(widget, "size", "normal")
         return size.value if hasattr(size, "value") else str(size)
+
+    grid_rows = _estimate_rows(widgets, _size_name)
 
     cells: list[GridCell] = []
     # Track occupied cells as a set of (row, col) tuples
@@ -51,7 +64,7 @@ def pack_grid(widgets: list[WidgetSlot]) -> GridLayout:
         row_span = SIZE_ROWS.get(size_name, SIZE_ROWS["normal"])
 
         placed = False
-        for row_start in range(1, GRID_ROWS + 2 - row_span):
+        for row_start in range(1, grid_rows + 2 - row_span):
             for col_start in range(1, GRID_COLS + 2 - col_span):
                 # Check if this position is free
                 if _can_place(occupied, row_start, col_start, row_span, col_span):
@@ -72,15 +85,19 @@ def pack_grid(widgets: list[WidgetSlot]) -> GridLayout:
         if not placed:
             logger.warning(f"[GridPacker] Could not place widget {widget.id} ({size_name})")
 
+    # Actual rows used
+    max_row_used = max((c.row_end - 1 for c in cells), default=GRID_ROWS)
+    actual_rows = max(GRID_ROWS, max_row_used)
+
     # Calculate utilization
-    total_cells = GRID_COLS * GRID_ROWS
+    total_cells = GRID_COLS * actual_rows
     used_cells = len(occupied)
     utilization = used_cells / total_cells * 100 if total_cells > 0 else 0.0
 
     return GridLayout(
         cells=cells,
         total_cols=GRID_COLS,
-        total_rows=GRID_ROWS,
+        total_rows=actual_rows,
         utilization_pct=round(utilization, 1),
     )
 

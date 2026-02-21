@@ -281,7 +281,7 @@ class TemplateService:
             error = result.unwrap_err()
             if isinstance(error, TemplateImportError):
                 raise error
-            logger.exception("Template import failed")
+            self.logger.exception("Template import failed")
             raise TemplateImportError(code="import_failed", message="Template import failed")
 
         final_ctx = result.unwrap()

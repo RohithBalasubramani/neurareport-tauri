@@ -38,23 +38,39 @@ function renderError(err) {
   `
 }
 
-/** Show a loading splash while the backend starts up. */
+/** Show a loading splash while the backend starts up, with elapsed timer. */
 function showLoading() {
   const root = document.getElementById('root')
   root.innerHTML = `
     <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#64748b;background:#f8fafc">
       <div style="width:48px;height:48px;border:4px solid #e2e8f0;border-top-color:#3B82F6;border-radius:50%;animation:spin 0.8s linear infinite"></div>
       <p style="margin-top:20px;font-size:15px">Starting NeuraReport...</p>
+      <p id="loading-elapsed" style="margin-top:8px;font-size:13px;color:#94a3b8"></p>
       <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
     </div>
   `
+  const startTime = Date.now()
+  window._loadingTimer = setInterval(() => {
+    const el = document.getElementById('loading-elapsed')
+    if (el) {
+      const secs = Math.floor((Date.now() - startTime) / 1000)
+      el.textContent = secs < 10 ? '' : `${secs}s — first launch takes longer`
+    }
+  }, 1000)
+}
+
+function clearLoadingTimer() {
+  if (window._loadingTimer) {
+    clearInterval(window._loadingTimer)
+    window._loadingTimer = null
+  }
 }
 
 /**
- * In Tauri desktop mode, the Python backend may take 10-20s to start.
+ * In Tauri desktop mode, the Python backend may take 60-90s on first launch.
  * Poll the health endpoint until it responds before rendering the app.
  */
-async function waitForBackend(baseUrl, maxWaitMs = 60000) {
+async function waitForBackend(baseUrl, maxWaitMs = 120000) {
   const start = Date.now()
   const interval = 1000
   while (Date.now() - start < maxWaitMs) {
@@ -66,7 +82,7 @@ async function waitForBackend(baseUrl, maxWaitMs = 60000) {
     }
     await new Promise((r) => setTimeout(r, interval))
   }
-  throw new Error('Backend did not start within 60 seconds')
+  throw new Error('Backend did not start within 120 seconds')
 }
 
 // In Tauri desktop mode, discover the backend port, wait for it, then render.
@@ -76,9 +92,13 @@ async function bootstrap() {
   if (isTauri()) {
     showLoading()
     await waitForBackend(getApiBase())
+    clearLoadingTimer()
   }
 
   renderApp()
 }
 
-bootstrap().catch((err) => renderError(err))
+bootstrap().catch((err) => {
+  clearLoadingTimer()
+  renderError(err)
+})

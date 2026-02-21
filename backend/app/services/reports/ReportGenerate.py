@@ -7,7 +7,7 @@ import os
 import re
 from backend.app.repositories.dataframes import DuckDBDataFrameQuery, SQLiteDataFrameLoader, sqlite_shim as sqlite3
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from itertools import product
 from pathlib import Path
@@ -968,7 +968,8 @@ def fill_and_print(
 
     start_dt = _parse_date_like(START_DATE)
     end_dt = _parse_date_like(END_DATE)
-    print_dt = datetime.now(timezone.utc)
+    _IST = timezone(timedelta(hours=5, minutes=30))
+    print_dt = datetime.now(_IST)
 
     start_has_time = _has_time_component(START_DATE, start_dt)
     end_has_time = _has_time_component(END_DATE, end_dt)

@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover
     Table = None  # type: ignore
     TableStyleInfo = None  # type: ignore
 
-from .html_table_parser import extract_first_table, extract_tables
+from .html_table_parser import extract_first_table, extract_tables, extract_tables_with_header_counts
 
 logger = logging.getLogger("neura.reports.xlsx")
 
@@ -81,7 +81,9 @@ def html_file_to_xlsx(html_path: Path, output_path: Path) -> Optional[Path]:
         return None
 
     html_text = html_path.read_text(encoding="utf-8", errors="ignore")
-    tables = extract_tables(html_text)
+    tables_with_meta = extract_tables_with_header_counts(html_text)
+    tables = [t for t, _ in tables_with_meta]
+    thead_counts = [c for _, c in tables_with_meta]
     rows: list[list[str]] = []
     data_row_positions: list[int] = []
     preface_ranges: list[tuple[int, int]] = []
@@ -89,6 +91,7 @@ def html_file_to_xlsx(html_path: Path, output_path: Path) -> Optional[Path]:
 
     if tables:
         best_idx = _select_best_table_index(tables)
+        data_thead_count = thead_counts[best_idx] if best_idx < len(thead_counts) else 1
 
         for idx, table in enumerate(tables):
             is_data_table = idx == best_idx
@@ -96,9 +99,10 @@ def html_file_to_xlsx(html_path: Path, output_path: Path) -> Optional[Path]:
                 continue
             serial_counter = 0
             table_start_idx = len(rows) + 1
+            header_rows = data_thead_count if is_data_table else 1
             for row_idx_in_table, row in enumerate(table):
                 clean_row = [(cell or "").strip() for cell in row]
-                if is_data_table and row_idx_in_table > 0:
+                if is_data_table and row_idx_in_table >= header_rows:
                     if _looks_like_total_row(clean_row):
                         if clean_row:
                             clean_row[0] = ""
@@ -106,10 +110,10 @@ def html_file_to_xlsx(html_path: Path, output_path: Path) -> Optional[Path]:
                         serial_counter += 1
                         if not clean_row[0]:
                             clean_row[0] = str(serial_counter)
-                elif is_data_table and row_idx_in_table == 0:
+                elif is_data_table and row_idx_in_table == header_rows - 1:
                     data_header_row_idx = len(rows) + 1
                 rows.append(clean_row)
-                if is_data_table and row_idx_in_table > 0:
+                if is_data_table and row_idx_in_table >= header_rows:
                     data_row_positions.append(len(rows))
             table_end_idx = len(rows)
             if (not is_data_table) and table_end_idx >= table_start_idx:

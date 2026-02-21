@@ -1083,6 +1083,12 @@ def fill_and_print(
         "runon",
         "generatedat",
     }
+    PRINT_TIME_KEYS = {
+        "printtime",
+        "printedat",
+        "generatedtime",
+        "runtime",
+    }
     PAGE_NO_KEYS = {
         "page",
         "pageno",
@@ -1142,6 +1148,7 @@ def fill_and_print(
     start_tokens = _tokens_for_keys(START_DATE_KEYS)
     end_tokens = _tokens_for_keys(END_DATE_KEYS)
     print_tokens = _tokens_for_keys(PRINT_DATE_KEYS)
+    print_time_tokens = _tokens_for_keys(PRINT_TIME_KEYS)
     page_number_tokens = _tokens_for_keys(PAGE_NO_KEYS)
     page_count_tokens = _tokens_for_keys(PAGE_COUNT_KEYS)
     page_label_tokens = _tokens_for_keys(PAGE_LABEL_KEYS)
@@ -1170,6 +1177,9 @@ def fill_and_print(
         else:
             value = _format_for_token(tok, print_dt_source, include_time_default=print_has_time)
         _record_special_value(special_values, tok, value)
+
+    for tok in print_time_tokens:
+        _record_special_value(special_values, tok, print_dt.strftime("%I:%M %p") if print_dt else "")
 
     page_number_tokens = _filter_tokens_without_literal(page_number_tokens)
     page_count_tokens = _filter_tokens_without_literal(page_count_tokens)

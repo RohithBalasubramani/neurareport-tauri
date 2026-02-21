@@ -112,8 +112,8 @@ def format_fixed_decimals(value: Any, decimals: int, max_decimals: int = 3) -> s
     if rounded == 0:
         rounded = Decimal(0).quantize(quantizer, rounding=ROUND_HALF_UP) if decimals else Decimal(0)
     formatted = format(rounded, "f")
-    if formatted.startswith("-0"):
-        formatted = format(Decimal(0).quantize(quantizer, rounding=ROUND_HALF_UP) if decimals else Decimal(0), "f")
+    if rounded == 0 and formatted.startswith("-"):
+        formatted = formatted[1:]
     return formatted
 
 

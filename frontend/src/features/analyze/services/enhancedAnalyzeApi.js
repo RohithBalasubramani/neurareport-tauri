@@ -11,7 +11,7 @@
 
 import { API_BASE, fetchWithIntent, handleStreamingResponse } from '@/api/client'
 
-const API_V2 = `${API_BASE}/analyze/v2`
+const getApiV2 = () => `${API_BASE}/analyze/v2`
 
 /**
  * Upload and analyze a document with enhanced AI features
@@ -40,7 +40,7 @@ export async function uploadAndAnalyzeEnhanced({
     form.append('preferences', JSON.stringify(preferences))
   }
 
-  const res = await fetchWithIntent(`${API_V2}/upload`, {
+  const res = await fetchWithIntent(`${getApiV2()}/upload`, {
     method: 'POST',
     body: form,
     signal,
@@ -61,7 +61,7 @@ export async function uploadAndAnalyzeEnhanced({
 export async function getEnhancedAnalysis(analysisId) {
   if (!analysisId) throw new Error('Analysis ID is required')
 
-  const res = await fetchWithIntent(`${API_V2}/${encodeURIComponent(analysisId)}`)
+  const res = await fetchWithIntent(`${getApiV2()}/${encodeURIComponent(analysisId)}`)
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(text || `Failed to get analysis (${res.status})`)
@@ -83,7 +83,7 @@ export async function askQuestion(analysisId, { question, includeSources = true,
   if (!analysisId) throw new Error('Analysis ID is required')
   if (!question) throw new Error('Question is required')
 
-  const res = await fetchWithIntent(`${API_V2}/${encodeURIComponent(analysisId)}/ask`, {
+  const res = await fetchWithIntent(`${getApiV2()}/${encodeURIComponent(analysisId)}/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -107,7 +107,7 @@ export async function askQuestion(analysisId, { question, includeSources = true,
  * @returns {Promise<Object>} Suggested questions
  */
 export async function getSuggestedQuestions(analysisId) {
-  const res = await fetchWithIntent(`${API_V2}/${encodeURIComponent(analysisId)}/suggested-questions`)
+  const res = await fetchWithIntent(`${getApiV2()}/${encodeURIComponent(analysisId)}/suggested-questions`)
   if (!res.ok) {
     throw new Error('Failed to get suggested questions')
   }
@@ -128,7 +128,7 @@ export async function generateCharts(analysisId, { query, includeTrends = true, 
   if (!analysisId) throw new Error('Analysis ID is required')
   if (!query) throw new Error('Query is required')
 
-  const res = await fetchWithIntent(`${API_V2}/${encodeURIComponent(analysisId)}/charts/generate`, {
+  const res = await fetchWithIntent(`${getApiV2()}/${encodeURIComponent(analysisId)}/charts/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -151,7 +151,7 @@ export async function generateCharts(analysisId, { query, includeTrends = true, 
  * @returns {Promise<Object>} Charts and suggestions
  */
 export async function getCharts(analysisId) {
-  const res = await fetchWithIntent(`${API_V2}/${encodeURIComponent(analysisId)}/charts`)
+  const res = await fetchWithIntent(`${getApiV2()}/${encodeURIComponent(analysisId)}/charts`)
   if (!res.ok) {
     throw new Error('Failed to get charts')
   }
@@ -166,7 +166,7 @@ export async function getCharts(analysisId) {
  * @returns {Promise<Object>} Tables data
  */
 export async function getTables(analysisId, limit = 10) {
-  const res = await fetchWithIntent(`${API_V2}/${encodeURIComponent(analysisId)}/tables?limit=${limit}`)
+  const res = await fetchWithIntent(`${getApiV2()}/${encodeURIComponent(analysisId)}/tables?limit=${limit}`)
   if (!res.ok) {
     throw new Error('Failed to get tables')
   }
@@ -180,7 +180,7 @@ export async function getTables(analysisId, limit = 10) {
  * @returns {Promise<Object>} Metrics data
  */
 export async function getMetrics(analysisId) {
-  const res = await fetchWithIntent(`${API_V2}/${encodeURIComponent(analysisId)}/metrics`)
+  const res = await fetchWithIntent(`${getApiV2()}/${encodeURIComponent(analysisId)}/metrics`)
   if (!res.ok) {
     throw new Error('Failed to get metrics')
   }
@@ -194,7 +194,7 @@ export async function getMetrics(analysisId) {
  * @returns {Promise<Object>} Entities data
  */
 export async function getEntities(analysisId) {
-  const res = await fetchWithIntent(`${API_V2}/${encodeURIComponent(analysisId)}/entities`)
+  const res = await fetchWithIntent(`${getApiV2()}/${encodeURIComponent(analysisId)}/entities`)
   if (!res.ok) {
     throw new Error('Failed to get entities')
   }
@@ -208,7 +208,7 @@ export async function getEntities(analysisId) {
  * @returns {Promise<Object>} Insights data
  */
 export async function getInsights(analysisId) {
-  const res = await fetchWithIntent(`${API_V2}/${encodeURIComponent(analysisId)}/insights`)
+  const res = await fetchWithIntent(`${getApiV2()}/${encodeURIComponent(analysisId)}/insights`)
   if (!res.ok) {
     throw new Error('Failed to get insights')
   }
@@ -222,7 +222,7 @@ export async function getInsights(analysisId) {
  * @returns {Promise<Object>} Data quality report
  */
 export async function getDataQuality(analysisId) {
-  const res = await fetchWithIntent(`${API_V2}/${encodeURIComponent(analysisId)}/quality`)
+  const res = await fetchWithIntent(`${getApiV2()}/${encodeURIComponent(analysisId)}/quality`)
   if (!res.ok) {
     throw new Error('Failed to get data quality')
   }
@@ -237,7 +237,7 @@ export async function getDataQuality(analysisId) {
  * @returns {Promise<Object>} Summary data
  */
 export async function getSummary(analysisId, mode) {
-  const res = await fetchWithIntent(`${API_V2}/${encodeURIComponent(analysisId)}/summary/${mode}`)
+  const res = await fetchWithIntent(`${getApiV2()}/${encodeURIComponent(analysisId)}/summary/${mode}`)
   if (!res.ok) {
     throw new Error(`Failed to get ${mode} summary`)
   }
@@ -255,7 +255,7 @@ export async function getSummary(analysisId, mode) {
  * @returns {Promise<Blob>} The exported file
  */
 export async function exportAnalysis(analysisId, { format = 'json', includeRawData = true, includeCharts = true }) {
-  const res = await fetchWithIntent(`${API_V2}/${encodeURIComponent(analysisId)}/export`, {
+  const res = await fetchWithIntent(`${getApiV2()}/${encodeURIComponent(analysisId)}/export`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -280,7 +280,7 @@ export async function exportAnalysis(analysisId, { format = 'json', includeRawDa
  * @returns {Promise<Object>} Comparison result
  */
 export async function compareDocuments(analysisId1, analysisId2) {
-  const res = await fetchWithIntent(`${API_V2}/compare`, {
+  const res = await fetchWithIntent(`${getApiV2()}/compare`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -308,7 +308,7 @@ export async function compareDocuments(analysisId1, analysisId2) {
  * @returns {Promise<Object>} Created comment
  */
 export async function addComment(analysisId, { content, elementType, elementId, userId = 'anonymous', userName = 'Anonymous' }) {
-  const res = await fetchWithIntent(`${API_V2}/${encodeURIComponent(analysisId)}/comments`, {
+  const res = await fetchWithIntent(`${getApiV2()}/${encodeURIComponent(analysisId)}/comments`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -333,7 +333,7 @@ export async function addComment(analysisId, { content, elementType, elementId, 
  * @returns {Promise<Object>} Comments
  */
 export async function getComments(analysisId) {
-  const res = await fetchWithIntent(`${API_V2}/${encodeURIComponent(analysisId)}/comments`)
+  const res = await fetchWithIntent(`${getApiV2()}/${encodeURIComponent(analysisId)}/comments`)
   if (!res.ok) {
     throw new Error('Failed to get comments')
   }
@@ -352,7 +352,7 @@ export async function getComments(analysisId) {
  * @returns {Promise<Object>} Share link info
  */
 export async function createShareLink(analysisId, { accessLevel = 'view', expiresHours, passwordProtected = false, allowedEmails = [] }) {
-  const res = await fetchWithIntent(`${API_V2}/${encodeURIComponent(analysisId)}/share`, {
+  const res = await fetchWithIntent(`${getApiV2()}/${encodeURIComponent(analysisId)}/share`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -375,7 +375,7 @@ export async function createShareLink(analysisId, { accessLevel = 'view', expire
  * @returns {Promise<Object>} Industry options
  */
 export async function getIndustryOptions() {
-  const res = await fetchWithIntent(`${API_V2}/config/industries`)
+  const res = await fetchWithIntent(`${getApiV2()}/config/industries`)
   if (!res.ok) {
     throw new Error('Failed to get industry options')
   }
@@ -388,7 +388,7 @@ export async function getIndustryOptions() {
  * @returns {Promise<Object>} Export formats
  */
 export async function getExportFormats() {
-  const res = await fetchWithIntent(`${API_V2}/config/export-formats`)
+  const res = await fetchWithIntent(`${getApiV2()}/config/export-formats`)
   if (!res.ok) {
     throw new Error('Failed to get export formats')
   }
@@ -401,7 +401,7 @@ export async function getExportFormats() {
  * @returns {Promise<Object>} Chart types
  */
 export async function getChartTypes() {
-  const res = await fetchWithIntent(`${API_V2}/config/chart-types`)
+  const res = await fetchWithIntent(`${getApiV2()}/config/chart-types`)
   if (!res.ok) {
     throw new Error('Failed to get chart types')
   }
@@ -414,7 +414,7 @@ export async function getChartTypes() {
  * @returns {Promise<Object>} Summary modes
  */
 export async function getSummaryModes() {
-  const res = await fetchWithIntent(`${API_V2}/config/summary-modes`)
+  const res = await fetchWithIntent(`${getApiV2()}/config/summary-modes`)
   if (!res.ok) {
     throw new Error('Failed to get summary modes')
   }

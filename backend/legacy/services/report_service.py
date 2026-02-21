@@ -1038,6 +1038,10 @@ def _run_report_job_sync(
         error_code = str(exc.detail.get("code") or "").lower() if isinstance(exc.detail, Mapping) else ""
         is_cancelled = error_code == "job_cancelled"
         job_error = error_message
+        # Print to stderr so it appears in Tauri desktop logs
+        import traceback
+        print(f"[REPORT_ERROR] job={job_id} http_error={error_message} code={error_code}", flush=True)
+        traceback.print_exc()
 
         if is_cancelled:
             tracker.fail(error_message, status="cancelled")
@@ -1111,6 +1115,10 @@ def _run_report_job_sync(
     except Exception as exc:
         error_str = str(exc)
         job_error = "Report generation failed"
+        # Print full traceback to stderr so it appears in Tauri desktop logs
+        import traceback
+        print(f"[REPORT_ERROR] job={job_id} error={error_str}", flush=True)
+        traceback.print_exc()
 
         # Check if error is retriable
         retriable = is_retriable_error(error_str)

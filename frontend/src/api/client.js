@@ -36,18 +36,14 @@ function resolveBaseUrl(url) {
   } catch (_) { /* not a full URL, keep as-is */ }
   return url
 }
-export const API_BASE = envBaseUrl === 'proxy' ? '/api' : (resolveBaseUrl(envBaseUrl) || 'http://127.0.0.1:8000')
+export let API_BASE = envBaseUrl === 'proxy' ? '/api' : (resolveBaseUrl(envBaseUrl) || 'http://127.0.0.1:8000')
 
 // Canonical API version base (plan.md): clients target `/api/v1` only.
-export const API_V1_BASE =
+export let API_V1_BASE =
   API_BASE.endsWith('/api/v1') ? API_BASE : `${API_BASE.replace(/\/$/, '')}/api/v1`
 
-// Mutable base URL — updated by initApiForTauri() when running in Tauri desktop mode.
-let _apiBase = API_BASE
-let _apiV1Base = API_V1_BASE
-
 /** Get the current API base URL (may change after initApiForTauri). */
-export function getApiBase() { return _apiBase }
+export function getApiBase() { return API_BASE }
 
 /**
  * Re-initialize API base URL for Tauri desktop mode.
@@ -57,11 +53,11 @@ export async function initApiForTauri() {
   if (!isTauri()) return
   const tauriUrl = await getTauriBackendUrl()
   if (tauriUrl) {
-    _apiBase = tauriUrl
-    _apiV1Base = `${tauriUrl}/api/v1`
-    api.defaults.baseURL = _apiV1Base
+    API_BASE = tauriUrl
+    API_V1_BASE = `${tauriUrl}/api/v1`
+    api.defaults.baseURL = API_V1_BASE
     setErrorLoggerOrigin(tauriUrl)
-    console.log(`[tauri] API base URL set to: ${_apiV1Base}`)
+    console.log(`[tauri] API base URL set to: ${API_V1_BASE}`)
   }
 }
 
@@ -77,20 +73,20 @@ export const toApiUrl = (url) => {
   if (!url) return url
   if (isAbsoluteUrl(url)) return url
   // Avoid double-prefixing if callers already included a base (legacy behavior).
-  if (url === _apiBase || url.startsWith(`${_apiBase}/`)) return url
-  if (url === _apiV1Base || url.startsWith(`${_apiV1Base}/`)) return url
+  if (url === API_BASE || url.startsWith(`${API_BASE}/`)) return url
+  if (url === API_V1_BASE || url.startsWith(`${API_V1_BASE}/`)) return url
 
   // Static roots stay at the app root, not under `/api/v1`.
   if (url.startsWith('/uploads') || url.startsWith('/excel-uploads') || url.startsWith('/ws')) {
-    return joinUrl(_apiBase, url)
+    return joinUrl(API_BASE, url)
   }
 
   // If caller already versioned the path, keep it.
   if (url.startsWith('/api/v1')) {
-    return joinUrl(_apiBase, url)
+    return joinUrl(API_BASE, url)
   }
 
-  return joinUrl(_apiV1Base, url)
+  return joinUrl(API_V1_BASE, url)
 }
 
 

@@ -134,11 +134,11 @@ prodo/
 # Orphaned directories (from path misconfiguration)
 backend/backend/
 
-# Build artifacts
-build/
-dist/
-tmp/
-temp/
+# Build artifacts (root-level only to avoid ignoring source dirs)
+/build/
+/dist/
+/tmp/
+/temp/
 
 # Tauri build artifacts
 frontend/src-tauri/target/

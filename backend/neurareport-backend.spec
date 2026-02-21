@@ -178,7 +178,7 @@ a = Analysis(
         'strawberry',
         'prefect',
     ],
-    noarchive=False,
+    noarchive=True,
 )
 
 pyz = PYZ(a.pure)

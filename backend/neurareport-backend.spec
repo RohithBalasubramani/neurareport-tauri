@@ -7,10 +7,19 @@ Run from the repo root:
   .venv/bin/pyinstaller backend/neurareport-backend.spec
 """
 import os
+import sys
 from pathlib import Path
 
 repo_root = Path(SPECPATH).parent  # /home/rohith/desktop/neurareport-tauri
 backend_dir = repo_root / 'backend'
+
+print(f"[SPEC DEBUG] repo_root = {repo_root}")
+print(f"[SPEC DEBUG] backend_dir = {backend_dir}")
+print(f"[SPEC DEBUG] backend_dir.exists() = {backend_dir.exists()}")
+
+# Verify critical files exist
+_critical_check = backend_dir / 'app' / 'repositories' / 'state' / 'store.py'
+print(f"[SPEC DEBUG] {_critical_check} exists = {_critical_check.exists()}")
 
 # --- Auto-discover ALL backend.* modules so nothing is missed ---
 _auto_backend = []
@@ -28,8 +37,30 @@ for py_file in sorted(backend_dir.rglob('*.py')):
     if mod:
         _auto_backend.append(mod)
 
-# --- Hidden imports: auto-discovered + known dynamic imports ---
-hidden_imports = _auto_backend + [
+print(f"[SPEC DEBUG] Auto-discovered {len(_auto_backend)} backend modules")
+# Print all modules containing 'repositories' or 'state'
+_repo_mods = [m for m in _auto_backend if 'repositor' in m or '.state' in m]
+print(f"[SPEC DEBUG] Repository/state modules: {_repo_mods}")
+
+# Also use collect_submodules as belt-and-suspenders
+try:
+    # Ensure backend is importable from the spec
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from PyInstaller.utils.hooks import collect_submodules
+    _collected = collect_submodules('backend')
+    print(f"[SPEC DEBUG] collect_submodules found {len(_collected)} modules")
+    _collected_repo = [m for m in _collected if 'repositor' in m or '.state' in m]
+    print(f"[SPEC DEBUG] collect_submodules repo/state: {_collected_repo}")
+    # Merge: use union of both approaches
+    _all_mods = sorted(set(_auto_backend) | set(_collected))
+    print(f"[SPEC DEBUG] Merged total: {len(_all_mods)} modules")
+except Exception as e:
+    print(f"[SPEC DEBUG] collect_submodules failed: {e}")
+    _all_mods = _auto_backend
+
+# --- Hidden imports: auto-discovered + collected + known dynamic imports ---
+hidden_imports = _all_mods + [
     # uvicorn internals
     'uvicorn.logging',
     'uvicorn.loops',

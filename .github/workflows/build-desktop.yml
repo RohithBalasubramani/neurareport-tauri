@@ -54,6 +54,17 @@ jobs:
           pip install -r backend/requirements-desktop.txt
           pip install pyinstaller
 
+      - name: Verify checkout contains critical files
+        shell: pwsh
+        run: |
+          Write-Host "=== Checking backend/app/repositories/state/ ==="
+          Get-ChildItem -Path backend/app/repositories/state/ -Recurse
+          Write-Host "=== Checking backend/app/repositories/ ==="
+          Get-ChildItem -Path backend/app/repositories/ -Recurse -Filter *.py | Select-Object FullName
+          Write-Host "=== Total .py files in backend/ (excluding tests/.venv) ==="
+          $count = (Get-ChildItem -Path backend/ -Recurse -Filter *.py | Where-Object { $_.FullName -notmatch '(tests|\.venv|__pycache__|migrations)' }).Count
+          Write-Host "Total: $count .py files"
+
       - name: Build backend sidecar (PyInstaller)
         run: python -m PyInstaller backend/neurareport-backend.spec --distpath frontend/src-tauri/ --noconfirm --clean
 

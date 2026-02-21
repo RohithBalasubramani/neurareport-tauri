@@ -11,6 +11,7 @@ Configures environment for single-user desktop mode:
 import argparse
 import os
 import platform
+import stat
 import sys
 from pathlib import Path
 
@@ -41,6 +42,18 @@ def main():
     # Logs directory (writable location outside frozen bundle)
     logs_dir = data_dir / "logs"
     logs_dir.mkdir(exist_ok=True)
+
+    # Ensure existing DB files are writable (previous installations may
+    # have left them read-only, e.g. when installed to Program Files).
+    state_dir = data_dir / "state"
+    for f in state_dir.iterdir():
+        if f.is_file():
+            try:
+                mode = f.stat().st_mode
+                if not (mode & stat.S_IWRITE):
+                    f.chmod(mode | stat.S_IWRITE)
+            except OSError:
+                pass
 
     # Desktop-mode environment defaults
     os.environ.setdefault("NEURA_DEBUG", "true")

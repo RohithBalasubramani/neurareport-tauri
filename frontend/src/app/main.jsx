@@ -5,7 +5,7 @@ import * as Sentry from '@sentry/react'
 import './index.css'
 import App from './App.jsx'
 import { installGlobalFrontendErrorHandlers } from '@/api/frontendErrorLogger'
-import { initApiForTauri } from '@/api/client'
+import { initApiForTauri, getApiBase } from '@/api/client'
 import { isTauri } from '@/utils/tauri'
 
 installGlobalFrontendErrorHandlers()
@@ -38,7 +38,47 @@ function renderError(err) {
   `
 }
 
-// In Tauri desktop mode, discover the backend port before rendering.
-initApiForTauri()
-  .then(() => renderApp())
-  .catch((err) => renderError(err))
+/** Show a loading splash while the backend starts up. */
+function showLoading() {
+  const root = document.getElementById('root')
+  root.innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#64748b;background:#f8fafc">
+      <div style="width:48px;height:48px;border:4px solid #e2e8f0;border-top-color:#3B82F6;border-radius:50%;animation:spin 0.8s linear infinite"></div>
+      <p style="margin-top:20px;font-size:15px">Starting NeuraReport...</p>
+      <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+    </div>
+  `
+}
+
+/**
+ * In Tauri desktop mode, the Python backend may take 10-20s to start.
+ * Poll the health endpoint until it responds before rendering the app.
+ */
+async function waitForBackend(baseUrl, maxWaitMs = 60000) {
+  const start = Date.now()
+  const interval = 1000
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const resp = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(2000) })
+      if (resp.ok) return
+    } catch (_) {
+      // Backend not ready yet
+    }
+    await new Promise((r) => setTimeout(r, interval))
+  }
+  throw new Error('Backend did not start within 60 seconds')
+}
+
+// In Tauri desktop mode, discover the backend port, wait for it, then render.
+async function bootstrap() {
+  await initApiForTauri()
+
+  if (isTauri()) {
+    showLoading()
+    await waitForBackend(getApiBase())
+  }
+
+  renderApp()
+}
+
+bootstrap().catch((err) => renderError(err))

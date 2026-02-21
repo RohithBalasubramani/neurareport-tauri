@@ -46,6 +46,9 @@ export const API_V1_BASE =
 let _apiBase = API_BASE
 let _apiV1Base = API_V1_BASE
 
+/** Get the current API base URL (may change after initApiForTauri). */
+export function getApiBase() { return _apiBase }
+
 /**
  * Re-initialize API base URL for Tauri desktop mode.
  * Call once at app startup before any API requests.

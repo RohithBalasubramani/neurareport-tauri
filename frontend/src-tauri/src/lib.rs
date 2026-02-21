@@ -224,12 +224,11 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                let managed = window.state::<Mutex<BackendState>>();
-                if let Ok(mut state) = managed.lock() {
-                    if let Some(ref mut child) = state.child {
-                        log("[tauri] Killing backend process");
-                        let _ = child.kill();
-                    }
+                let managed: tauri::State<'_, Mutex<BackendState>> = window.state();
+                let mut state = managed.lock().unwrap();
+                if let Some(ref mut child) = state.child {
+                    log("[tauri] Killing backend process");
+                    let _ = child.kill();
                 }
             }
         })

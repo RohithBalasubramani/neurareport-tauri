@@ -93,24 +93,60 @@ jobs:
 
       - name: Test sidecar binary starts
         shell: pwsh
-        timeout-minutes: 2
+        timeout-minutes: 3
         run: |
           Write-Host "Starting sidecar on port 19876..."
+          # Force unbuffered Python output so we can read logs in real time
+          $env:PYTHONUNBUFFERED = "1"
           $proc = Start-Process -FilePath "frontend/src-tauri/neurareport-backend.exe" `
-            -ArgumentList "--port","19876" -PassThru -RedirectStandardOutput "sidecar_stdout.txt" -RedirectStandardError "sidecar_stderr.txt"
-          Start-Sleep -Seconds 20
-          Write-Host "=== STDOUT ==="
+            -ArgumentList "--port","19876" -PassThru `
+            -RedirectStandardOutput "sidecar_stdout.txt" `
+            -RedirectStandardError "sidecar_stderr.txt"
+
+          # Poll for health every 5s, up to 90s total
+          $healthy = $false
+          for ($i = 1; $i -le 18; $i++) {
+            Start-Sleep -Seconds 5
+            Write-Host "--- Poll $i (${i}x5s = $($i*5)s) ---"
+
+            # Show process status
+            if ($proc.HasExited) {
+              Write-Host "Process EXITED with code $($proc.ExitCode)"
+              break
+            }
+
+            # Show latest stderr (tail last 5 lines)
+            if (Test-Path "sidecar_stderr.txt") {
+              $lines = Get-Content "sidecar_stderr.txt" -ErrorAction SilentlyContinue
+              if ($lines) {
+                $tail = $lines | Select-Object -Last 5
+                Write-Host "  stderr tail: $($tail -join ' | ')"
+              }
+            }
+
+            # Try health check
+            try {
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:19876/health" -UseBasicParsing -TimeoutSec 3
+              Write-Host "Health check PASSED: $($response.Content)"
+              $healthy = $true
+              break
+            } catch {
+              Write-Host "  health: not ready yet"
+            }
+          }
+
+          # Dump full output
+          Write-Host "`n=== FULL STDOUT ==="
           if (Test-Path "sidecar_stdout.txt") { Get-Content "sidecar_stdout.txt" }
-          Write-Host "=== STDERR ==="
+          Write-Host "`n=== FULL STDERR ==="
           if (Test-Path "sidecar_stderr.txt") { Get-Content "sidecar_stderr.txt" }
-          Write-Host "=== Process exited: $($proc.HasExited), exit code: $($proc.ExitCode) ==="
-          try {
-            $response = Invoke-WebRequest -Uri "http://127.0.0.1:19876/health" -UseBasicParsing -TimeoutSec 5
-            Write-Host "Health check: $($response.Content)"
-          } catch {
-            Write-Host "Health check FAILED: $_"
-          } finally {
-            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          Write-Host "`n=== Process exited: $($proc.HasExited), exit code: $($proc.ExitCode) ==="
+
+          # Cleanup
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+
+          if (-not $healthy) {
+            Write-Host "::warning::Sidecar health check did not pass within 90 seconds"
           }
 
       - name: Rename sidecar with target triple

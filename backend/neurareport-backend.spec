@@ -142,7 +142,7 @@ a = Analysis(
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(backend_dir / 'runtime_debug_hook.py')],
     excludes=[
         # Exclude heavy optional deps not needed for desktop SQLite mode
         'psycopg2',

@@ -71,64 +71,44 @@ jobs:
       - name: Inspect sidecar binary contents
         run: |
           python -c "
-          import subprocess, sys, zipfile, struct
-          exe_path = 'frontend/src-tauri/neurareport-backend.exe'
-          # PyInstaller one-file EXEs have a PYZ archive embedded.
-          # Use pyi-archive_viewer in non-interactive mode to list TOC.
-          try:
-              from PyInstaller.archive.readers import CArchiveReader, ZlibArchiveReader
-              arch = CArchiveReader(exe_path)
-              toc_names = [name for name, *_ in arch.toc]
-              print(f'=== CArchive TOC: {len(toc_names)} entries ===')
-              # Check for our critical module
-              state_mods = [n for n in toc_names if 'repositories' in n or 'state_access' in n]
-              print(f'State/repo entries: {state_mods}')
-              # Check for PYZ
-              pyz_entries = [n for n in toc_names if n.endswith('.pyz')]
-              print(f'PYZ archives: {pyz_entries}')
-              # Try to read the PYZ and list backend modules
-              for pyz_name in pyz_entries:
-                  try:
-                      pyz_data = arch.extract(pyz_name)
-                      # Write to temp file to read
-                      import tempfile, os
-                      tmp = tempfile.NamedTemporaryFile(suffix='.pyz', delete=False)
-                      tmp.write(pyz_data)
-                      tmp.close()
-                      pyz = ZlibArchiveReader(tmp.name)
-                      pyz_mods = [name for name, *_ in pyz.toc]
-                      backend_mods = [m for m in pyz_mods if m.startswith('backend.')]
-                      print(f'=== PYZ has {len(pyz_mods)} total, {len(backend_mods)} backend modules ===')
-                      repo_mods = [m for m in backend_mods if 'repositor' in m or 'state_access' in m]
-                      print(f'Repo/state in PYZ: {repo_mods}')
-                      if 'backend.app.repositories.state' not in pyz_mods:
-                          print('!!! MISSING: backend.app.repositories.state NOT in PYZ !!!')
-                      else:
-                          print('OK: backend.app.repositories.state IS in PYZ')
-                      os.unlink(tmp.name)
-                  except Exception as e2:
-                      print(f'PYZ read error: {e2}')
-          except Exception as e:
-              print(f'Archive inspection error: {e}')
-              import traceback; traceback.print_exc()
+          from PyInstaller.archive.readers import CArchiveReader
+          exe = 'frontend/src-tauri/neurareport-backend.exe'
+          arch = CArchiveReader(exe)
+          toc = arch.toc
+          # toc is a dict in PyInstaller 6.x: {name: (compress, typecode, offset, length)}
+          names = list(toc.keys()) if isinstance(toc, dict) else [str(e) for e in toc]
+          print(f'=== CArchive: {len(names)} entries ===')
+          repo = [n for n in names if 'repositor' in n or 'state_access' in n]
+          print(f'Repo/state entries in CArchive: {repo}')
+          pyz = [n for n in names if 'pyz' in n.lower() or 'PYZ' in n]
+          print(f'PYZ entries: {pyz}')
+          backend = [n for n in names if n.startswith('backend.')]
+          print(f'backend.* entries: {len(backend)}')
+          print(f'First 10 backend entries: {backend[:10]}')
+          if 'backend.app.repositories.state' in names:
+              print('OK: backend.app.repositories.state in CArchive')
+          else:
+              print('NOT in CArchive (may be in PYZ sub-archive)')
           "
 
       - name: Test sidecar binary starts
         shell: pwsh
-        timeout-minutes: 1
+        timeout-minutes: 2
         run: |
+          Write-Host "Starting sidecar on port 19876..."
           $proc = Start-Process -FilePath "frontend/src-tauri/neurareport-backend.exe" `
-            -ArgumentList "--port","19876" -PassThru -NoNewWindow -RedirectStandardError "sidecar_stderr.txt"
-          Start-Sleep -Seconds 15
+            -ArgumentList "--port","19876" -PassThru -RedirectStandardOutput "sidecar_stdout.txt" -RedirectStandardError "sidecar_stderr.txt"
+          Start-Sleep -Seconds 20
+          Write-Host "=== STDOUT ==="
+          if (Test-Path "sidecar_stdout.txt") { Get-Content "sidecar_stdout.txt" }
+          Write-Host "=== STDERR ==="
+          if (Test-Path "sidecar_stderr.txt") { Get-Content "sidecar_stderr.txt" }
+          Write-Host "=== Process exited: $($proc.HasExited), exit code: $($proc.ExitCode) ==="
           try {
             $response = Invoke-WebRequest -Uri "http://127.0.0.1:19876/health" -UseBasicParsing -TimeoutSec 5
             Write-Host "Health check: $($response.Content)"
           } catch {
             Write-Host "Health check FAILED: $_"
-            if (Test-Path "sidecar_stderr.txt") {
-              Write-Host "=== STDERR ==="
-              Get-Content "sidecar_stderr.txt"
-            }
           } finally {
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
           }

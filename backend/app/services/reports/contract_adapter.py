@@ -346,6 +346,8 @@ class ContractAdapter:
             "%Y-%m-%dT%H:%M:%S",
             "%d/%m/%Y",
             "%m/%d/%Y",
+            "%d-%m-%Y %H:%M:%S",
+            "%d-%m-%Y",
         ):
             try:
                 dt = datetime.strptime(text, pattern)
@@ -359,12 +361,25 @@ class ContractAdapter:
                 return text
 
         fmt_map = {
+            # Date only
             "DD/MM/YYYY": "%d/%m/%Y",
             "YYYY-MM-DD": "%Y-%m-%d",
             "DD-MM-YYYY": "%d-%m-%Y",
             "MM/DD/YYYY": "%m/%d/%Y",
+            # Date + time
+            "YYYY-MM-DD HH:MM:SS": "%Y-%m-%d %H:%M:%S",
+            "YYYY-MM-DD HH:MM": "%Y-%m-%d %H:%M",
+            "DD/MM/YYYY HH:MM:SS": "%d/%m/%Y %H:%M:%S",
+            "DD/MM/YYYY HH:MM": "%d/%m/%Y %H:%M",
+            "MM/DD/YYYY HH:MM:SS": "%m/%d/%Y %H:%M:%S",
+            "DD-MM-YYYY HH:MM:SS": "%d-%m-%Y %H:%M:%S",
+            "DD-MM-YYYY HH:MM": "%d-%m-%Y %H:%M",
+            # ISO 8601
+            "ISO": "%Y-%m-%dT%H:%M:%S",
+            "ISO8601": "%Y-%m-%dT%H:%M:%S",
         }
-        pattern = fmt_map.get(fmt.upper(), "%Y-%m-%d")
+        fallback = "%Y-%m-%d %H:%M:%S" if "HH" in fmt.upper() else "%Y-%m-%d"
+        pattern = fmt_map.get(fmt.upper(), fallback)
         return dt.strftime(pattern)
 
     @staticmethod
@@ -395,7 +410,7 @@ class ContractAdapter:
     def _apply_date_filter_df(self, df, table: str, start_date: str | None, end_date: str | None):
         """Apply date range filter to a DataFrame using contract date_columns."""
         import pandas as pd
-        from .discovery_excel import _coerce_datetime_series, _parse_date_like
+        from .discovery_excel import _coerce_datetime_series, _parse_date_like, _snap_end_of_day
 
         date_col = self._date_columns.get(table.lower()) or self._date_columns.get(table)
         if not date_col or date_col not in df.columns:
@@ -406,6 +421,8 @@ class ContractAdapter:
         end_dt = _parse_date_like(end_date) if end_date else None
         if start_dt is None and end_dt is None:
             return df
+        if end_dt is not None:
+            end_dt = _snap_end_of_day(end_dt)
 
         dt_series = _coerce_datetime_series(df[date_col])
         mask = pd.Series(True, index=df.index)
@@ -673,25 +690,8 @@ class ContractAdapter:
             resolved = False
             short = tok.removeprefix("row_") if tok.startswith("row_") else tok
 
-            # 1. Try direct mapping resolution (table.column)
-            ref = self._resolve_mapping_column(tok)
-            if ref:
-                _, col = ref
-                if col in df.columns:
-                    result_cols[tok] = df[col].values
-                    resolved = True
-                elif melt_alias_set and short in df.columns:
-                    # After MELT, columns are named by alias
-                    result_cols[tok] = df[short].values
-                    resolved = True
-
-            # 2. Try MELT alias match by stripped name
-            if not resolved and melt_alias_set and short in df.columns:
-                result_cols[tok] = df[short].values
-                resolved = True
-
-            # 3. Try row_computed
-            if not resolved and tok in self._row_computed:
+            # 1. Try row_computed first (format_date, concat, etc. take priority)
+            if tok in self._row_computed:
                 computed = self._apply_declarative_op(df, self._row_computed[tok])
                 if computed is not None:
                     result_cols[tok] = computed
@@ -705,8 +705,33 @@ class ContractAdapter:
                     except Exception:
                         pass
 
+            # 2. Try direct mapping resolution (table.column)
+            if not resolved:
+                ref = self._resolve_mapping_column(tok)
+                if ref:
+                    _, col = ref
+                    if col in df.columns:
+                        result_cols[tok] = df[col].values
+                        resolved = True
+                    elif melt_alias_set and short in df.columns:
+                        # After MELT, columns are named by alias
+                        result_cols[tok] = df[short].values
+                        resolved = True
+
+            # 3. Try MELT alias match by stripped name
+            if not resolved and melt_alias_set and short in df.columns:
+                result_cols[tok] = df[short].values
+                resolved = True
+
             # 4. Fallback
             if not resolved:
+                mapping_expr = self._mapping.get(tok, "")
+                logger.warning("row_token_unresolved", extra={
+                    "event": "row_token_unresolved",
+                    "token": tok,
+                    "mapping_expr": mapping_expr,
+                    "available_columns": list(df.columns)[:20],
+                })
                 result_cols[tok] = ""
 
         result_df = pd.DataFrame(result_cols)

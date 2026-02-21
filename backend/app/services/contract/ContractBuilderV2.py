@@ -659,6 +659,216 @@ def _normalize_df_mapping_sections(
             contract[section] = {str(t): _validate_df_expr(str(t), v) for t, v in block.items()}
 
 
+# ---------------------------------------------------------------------------
+# Contract post-processor — deterministic invariant enforcement after LLM
+# ---------------------------------------------------------------------------
+
+_DEFAULT_DATE_FORMAT = "%d-%m-%Y %H:%M:%S"
+_TIMESTAMP_COLUMN_NAMES = {"timestamp_utc", "timestamp", "created_at", "date", "datetime"}
+_SKIP_FORMATTER_COLUMNS = {"rowid", "__rowid__", "id", "pk"}
+
+
+def _ensure_date_columns(contract: dict[str, Any]) -> None:
+    """Auto-populate date_columns by scanning mapping for timestamp columns."""
+    date_columns = contract.get("date_columns")
+    if isinstance(date_columns, dict) and date_columns:
+        return
+    mapping = contract.get("mapping", {})
+    for tok, expr in mapping.items():
+        if not isinstance(expr, str) or "." not in expr:
+            continue
+        table, col = expr.rsplit(".", 1)
+        if col.lower() in _TIMESTAMP_COLUMN_NAMES:
+            contract.setdefault("date_columns", {})[table] = col
+            logger.info(
+                "postprocess_date_columns_inferred",
+                extra={"event": "postprocess_date_columns_inferred", "table": table, "column": col},
+            )
+            break
+
+
+def _ensure_date_filters(contract: dict[str, Any]) -> None:
+    """If date_columns exists, ensure filters.optional has date_from/date_to."""
+    date_columns = contract.get("date_columns")
+    if not isinstance(date_columns, dict) or not date_columns:
+        return
+    filters = contract.setdefault("filters", {})
+    optional = filters.setdefault("optional", {})
+    for table, col in date_columns.items():
+        if not table or not col:
+            continue
+        fqn = f"{table}.{col}"
+        if "date_from" not in optional:
+            optional["date_from"] = fqn
+        if "date_to" not in optional:
+            optional["date_to"] = fqn
+    if optional:
+        logger.info(
+            "postprocess_date_filters_ensured",
+            extra={"event": "postprocess_date_filters_ensured", "filters": dict(optional)},
+        )
+
+
+def _ensure_timestamp_formatting(contract: dict[str, Any]) -> None:
+    """Ensure every timestamp-mapped token has format_date in row_computed."""
+    mapping = contract.get("mapping", {})
+    row_computed = contract.setdefault("row_computed", {})
+    formatters = contract.get("formatters", {})
+
+    for tok, expr in mapping.items():
+        if not isinstance(expr, str) or "." not in expr:
+            continue
+        col_name = expr.rsplit(".", 1)[-1].lower()
+        if col_name not in _TIMESTAMP_COLUMN_NAMES:
+            continue
+        source_col = expr.rsplit(".", 1)[-1]
+        # Fix existing row_computed entries with incomplete date formats (missing time)
+        if tok in row_computed:
+            existing = row_computed[tok]
+            if isinstance(existing, dict) and existing.get("op") == "format_date":
+                fmt = existing.get("format", "")
+                if "%H" not in fmt and "%I" not in fmt:
+                    existing["format"] = _DEFAULT_DATE_FORMAT
+                    logger.info(
+                        "postprocess_timestamp_format_fixed",
+                        extra={"event": "postprocess_timestamp_format_fixed", "token": tok, "old_format": fmt},
+                    )
+            continue
+        if tok in formatters:
+            spec = str(formatters[tok]).strip().lower()
+            if spec.startswith("date("):
+                continue
+        row_computed[tok] = {
+            "op": "format_date",
+            "column": source_col,
+            "format": _DEFAULT_DATE_FORMAT,
+        }
+        logger.info(
+            "postprocess_timestamp_formatter_added",
+            extra={"event": "postprocess_timestamp_formatter_added", "token": tok, "column": source_col},
+        )
+
+
+def _normalize_formatter_conflicts(contract: dict[str, Any]) -> None:
+    """Remove date() formatters when row_computed.format_date exists for same token."""
+    row_computed = contract.get("row_computed", {})
+    formatters = contract.get("formatters", {})
+    to_remove = []
+    for tok, rc in row_computed.items():
+        if isinstance(rc, dict) and rc.get("op") == "format_date" and tok in formatters:
+            spec = str(formatters[tok]).strip().lower()
+            if spec.startswith("date("):
+                to_remove.append(tok)
+    for tok in to_remove:
+        formatters.pop(tok)
+        logger.info(
+            "postprocess_formatter_conflict_resolved",
+            extra={"event": "postprocess_formatter_conflict_resolved", "token": tok},
+        )
+
+
+def _ensure_numeric_formatters(contract: dict[str, Any], catalog: list[str]) -> None:
+    """Auto-add number(2) for numeric columns missing formatters."""
+    mapping = contract.get("mapping", {})
+    formatters = contract.setdefault("formatters", {})
+    row_computed = contract.get("row_computed", {})
+
+    for tok, expr in mapping.items():
+        if tok in formatters or tok in row_computed:
+            continue
+        if not isinstance(expr, str) or "." not in expr:
+            continue
+        col_name = expr.rsplit(".", 1)[-1].lower()
+        if col_name in _TIMESTAMP_COLUMN_NAMES or col_name in _SKIP_FORMATTER_COLUMNS:
+            continue
+        formatters[tok] = "number(2)"
+
+
+def _validate_mapping_against_catalog(contract: dict[str, Any], catalog: list[str]) -> None:
+    """Remove mapping entries that reference columns not in the catalog."""
+    catalog_set = {e.lower() for e in catalog}
+    mapping = contract.get("mapping", {})
+    unresolved = list(contract.get("unresolved") or [])
+    removed = []
+    for tok, expr in list(mapping.items()):
+        if not isinstance(expr, str):
+            continue
+        if expr.upper() in ("UNRESOLVED", "") or expr.startswith("PARAM:"):
+            continue
+        if "." in expr and expr.lower() not in catalog_set:
+            logger.warning(
+                "postprocess_invalid_column",
+                extra={"event": "postprocess_invalid_column", "token": tok, "expr": expr},
+            )
+            mapping.pop(tok)
+            unresolved.append(tok)
+            removed.append(tok)
+    if removed:
+        contract["unresolved"] = list(dict.fromkeys(unresolved))
+
+
+def _strip_unresolved_entries(contract: dict[str, Any]) -> None:
+    """Remove UNRESOLVED/empty mappings and clean related sections."""
+    mapping = contract.get("mapping", {})
+    unresolved = list(contract.get("unresolved") or [])
+    to_remove = [
+        k for k, v in mapping.items()
+        if isinstance(v, str) and v.strip().upper() in ("UNRESOLVED", "")
+    ]
+    for tok in to_remove:
+        mapping.pop(tok)
+    unresolved.extend(to_remove)
+    contract["unresolved"] = list(dict.fromkeys(unresolved))
+
+    remove_set = set(to_remove)
+    for key in ("row_tokens", "header_tokens"):
+        tokens = contract.get(key)
+        if isinstance(tokens, list):
+            contract[key] = [t for t in tokens if t not in remove_set]
+
+    reshape_rules = contract.get("reshape_rules")
+    if isinstance(reshape_rules, list):
+        for rule in reshape_rules:
+            cols = rule.get("columns")
+            if isinstance(cols, list):
+                rule["columns"] = [c for c in cols if c.get("as") not in remove_set]
+
+
+def _postprocess_contract(contract: dict[str, Any], catalog: list[str]) -> None:
+    """Enforce structural invariants the LLM may violate.
+
+    Runs after all normalization, before serialization.  Each sub-function
+    is idempotent — running the post-processor twice produces the same output.
+    """
+    before = {
+        "date_columns": bool(contract.get("date_columns")),
+        "filters_optional": len(contract.get("filters", {}).get("optional", {})),
+        "row_computed": len(contract.get("row_computed", {})),
+        "formatters": len(contract.get("formatters", {})),
+    }
+
+    _ensure_date_columns(contract)
+    _ensure_date_filters(contract)
+    _ensure_timestamp_formatting(contract)
+    _normalize_formatter_conflicts(contract)
+    _ensure_numeric_formatters(contract, catalog)
+    _validate_mapping_against_catalog(contract, catalog)
+    _strip_unresolved_entries(contract)
+
+    after = {
+        "date_columns": bool(contract.get("date_columns")),
+        "filters_optional": len(contract.get("filters", {}).get("optional", {})),
+        "row_computed": len(contract.get("row_computed", {})),
+        "formatters": len(contract.get("formatters", {})),
+    }
+    changes = {k: f"{before[k]} -> {after[k]}" for k in before if before[k] != after[k]}
+    if changes:
+        logger.warning(
+            "postprocess_contract_modified",
+            extra={"event": "postprocess_contract_modified", "changes": changes},
+        )
+
+
 def _serialize_contract(contract: dict[str, Any]) -> dict[str, Any]:
     """
     Return a deep-ish copy safe for persistence (ensures JSON serialisable values).
@@ -724,6 +934,11 @@ def build_or_load_contract_v2(
             )
             result = dict(cached)
             result["cached"] = True
+            contract = result.get("contract") or result.get("meta", {}).get("contract_payload")
+            if isinstance(contract, dict):
+                _postprocess_contract(contract, allow_list)
+                contract_path = template_dir / _CONTRACT_FILENAME
+                write_json_atomic(contract_path, contract, indent=2, ensure_ascii=False, step="contract_v2_postprocess_write")
             return result
 
     logger.info(
@@ -825,6 +1040,7 @@ def build_or_load_contract_v2(
         allow_list=allow_list,
         fallback_mapping=fallback_mapping_sources,
     )
+    _postprocess_contract(contract, allow_list)
 
     now = int(time.time())
     overview_path = template_dir / _OVERVIEW_FILENAME

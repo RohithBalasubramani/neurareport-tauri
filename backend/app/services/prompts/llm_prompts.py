@@ -535,10 +535,21 @@ LLM_CALL_4_SYSTEM_PROMPT_DF = dedent(
     CONTRACT STRUCTURE:
     - join: non-empty parent_table/parent_key required. If no child table, set child_table = parent_table, child_key = parent_key.
     - order_by.rows AND row_order: both non-empty arrays with identical content. Default ["ROWID"] if no logical ordering.
-    - formatters: "percent(2)", "date(YYYY-MM-DD)", "number(2)", etc.
+    - formatters: "percent(2)", "number(2)", "currency(2)", etc. Do NOT put "date()" in formatters for timestamp tokens.
     - unresolved: must be [].
     - header_tokens: copy of tokens.scalars array.
     - row_tokens: copy of tokens.row_tokens array.
+
+    MANDATORY RULES (violations will be auto-corrected by post-processor):
+    1. TIMESTAMP FORMATTING: Every token that maps to a timestamp/date column (timestamp_utc, timestamp, created_at, date, datetime) MUST have a row_computed entry:
+       {"op": "format_date", "column": "<col>", "format": "%d-%m-%Y %H:%M:%S"}
+       Do NOT use formatters "date(...)" for timestamps — always use row_computed.format_date.
+    2. NUMERIC FORMATTING: Every token that maps to a numeric measurement column MUST have a formatters entry. Default: "number(2)". Use higher precision only when the domain requires it (e.g., pH sensors → "number(4)").
+    3. DATE FILTERS: When date_columns is populated, filters.optional MUST contain:
+       "date_from": "TABLE.date_column", "date_to": "TABLE.date_column"
+       Never leave filters.optional empty when date_columns exists.
+    4. DATE_COLUMNS: If ANY mapped column is a timestamp/date type, date_columns MUST be populated with {"TABLE": "column_name"}.
+    5. CONSISTENCY: Use row_computed.format_date for timestamps and formatters for display formatting (number, percent, currency). Never mix — do not put "date()" in formatters for timestamp columns.
 
     ═══════════════════════════════════════════════════════════════
     INPUT PAYLOAD SHAPE:
@@ -607,6 +618,10 @@ LLM_CALL_4_SYSTEM_PROMPT_DF = dedent(
     - join block has all four non-empty string fields.
     - Every reshape rule has a non-empty "purpose".
     - token_coverage is 100%.
+    - Every timestamp-mapped token has row_computed.format_date with "%d-%m-%Y %H:%M:%S".
+    - Every numeric column token has a formatters entry (e.g., "number(2)").
+    - filters.optional has date_from/date_to when date_columns is non-empty.
+    - No "date()" entries in formatters for tokens that have row_computed.format_date.
     """
 ).strip()
 
@@ -636,6 +651,9 @@ LLM_CALL_5_PROMPT: Dict[str, str] = {
         - `order_by.rows` and `row_order`: both non-empty arrays, identical content. Default ["ROWID"].
         - Every reshape rule must have a non-empty "purpose" (≤15 words).
         - `header_tokens`: copy of tokens.scalars. `row_tokens`: copy of tokens.row_tokens.
+        - Verify timestamp tokens use row_computed.format_date with "%d-%m-%Y %H:%M:%S" (not formatters "date()").
+        - Verify all numeric measurement tokens have formatters entries (e.g., "number(2)").
+        - Verify filters.optional has date_from/date_to when date_columns exists.
 
         OUTPUT — return ONLY this JSON object, no markdown fences, no commentary:
         {

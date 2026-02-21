@@ -54,77 +54,50 @@ jobs:
           pip install -r backend/requirements-desktop.txt
           pip install pyinstaller
 
-      - name: Verify checkout contains critical files
-        shell: pwsh
-        run: |
-          Write-Host "=== Checking backend/app/repositories/state/ ==="
-          Get-ChildItem -Path backend/app/repositories/state/ -Recurse
-          Write-Host "=== Checking backend/app/repositories/ ==="
-          Get-ChildItem -Path backend/app/repositories/ -Recurse -Filter *.py | Select-Object FullName
-          Write-Host "=== Total .py files in backend/ (excluding tests/.venv) ==="
-          $count = (Get-ChildItem -Path backend/ -Recurse -Filter *.py | Where-Object { $_.FullName -notmatch '(tests|\.venv|__pycache__|migrations)' }).Count
-          Write-Host "Total: $count .py files"
-
-      - name: Build backend sidecar (PyInstaller)
+      - name: Build backend (PyInstaller onedir)
         run: python -m PyInstaller backend/neurareport-backend.spec --distpath frontend/src-tauri/ --noconfirm --clean
 
-      - name: Inspect sidecar binary contents
+      - name: Verify onedir output
+        shell: pwsh
         run: |
-          python -c "
-          from PyInstaller.archive.readers import CArchiveReader
-          exe = 'frontend/src-tauri/neurareport-backend.exe'
-          arch = CArchiveReader(exe)
-          toc = arch.toc
-          # toc is a dict in PyInstaller 6.x: {name: (compress, typecode, offset, length)}
-          names = list(toc.keys()) if isinstance(toc, dict) else [str(e) for e in toc]
-          print(f'=== CArchive: {len(names)} entries ===')
-          repo = [n for n in names if 'repositor' in n or 'state_access' in n]
-          print(f'Repo/state entries in CArchive: {repo}')
-          pyz = [n for n in names if 'pyz' in n.lower() or 'PYZ' in n]
-          print(f'PYZ entries: {pyz}')
-          backend = [n for n in names if n.startswith('backend.')]
-          print(f'backend.* entries: {len(backend)}')
-          print(f'First 10 backend entries: {backend[:10]}')
-          if 'backend.app.repositories.state' in names:
-              print('OK: backend.app.repositories.state in CArchive')
-          else:
-              print('NOT in CArchive (may be in PYZ sub-archive)')
-          "
+          Write-Host "=== Backend folder contents ==="
+          Get-ChildItem "frontend/src-tauri/neurareport-backend" | Select-Object Name, Length
+          $exe = "frontend/src-tauri/neurareport-backend/neurareport-backend.exe"
+          if (Test-Path $exe) {
+            Write-Host "OK: $exe exists ($(( Get-Item $exe ).Length / 1MB) MB)"
+          } else {
+            Write-Host "ERROR: Backend exe not found!"
+            exit 1
+          }
+          $pyc = Get-ChildItem "frontend/src-tauri/neurareport-backend" -Recurse -Filter "*.pyc" | Measure-Object
+          Write-Host "Total .pyc files: $($pyc.Count)"
 
-      - name: Test sidecar binary starts
+      - name: Test backend starts
         shell: pwsh
         timeout-minutes: 3
         run: |
-          Write-Host "Starting sidecar on port 19876..."
-          # Force unbuffered Python output so we can read logs in real time
+          Write-Host "Starting backend on port 19876..."
           $env:PYTHONUNBUFFERED = "1"
-          $proc = Start-Process -FilePath "frontend/src-tauri/neurareport-backend.exe" `
+          $proc = Start-Process -FilePath "frontend/src-tauri/neurareport-backend/neurareport-backend.exe" `
             -ArgumentList "--port","19876" -PassThru `
             -RedirectStandardOutput "sidecar_stdout.txt" `
             -RedirectStandardError "sidecar_stderr.txt"
 
-          # Poll for health every 5s, up to 90s total
           $healthy = $false
-          for ($i = 1; $i -le 18; $i++) {
+          for ($i = 1; $i -le 12; $i++) {
             Start-Sleep -Seconds 5
-            Write-Host "--- Poll $i (${i}x5s = $($i*5)s) ---"
-
-            # Show process status
+            Write-Host "--- Poll $i ($($i*5)s) ---"
             if ($proc.HasExited) {
               Write-Host "Process EXITED with code $($proc.ExitCode)"
               break
             }
-
-            # Show latest stderr (tail last 5 lines)
             if (Test-Path "sidecar_stderr.txt") {
               $lines = Get-Content "sidecar_stderr.txt" -ErrorAction SilentlyContinue
               if ($lines) {
-                $tail = $lines | Select-Object -Last 5
-                Write-Host "  stderr tail: $($tail -join ' | ')"
+                $tail = $lines | Select-Object -Last 3
+                Write-Host "  stderr: $($tail -join ' | ')"
               }
             }
-
-            # Try health check
             try {
               $response = Invoke-WebRequest -Uri "http://127.0.0.1:19876/health" -UseBasicParsing -TimeoutSec 3
               Write-Host "Health check PASSED: $($response.Content)"
@@ -135,25 +108,15 @@ jobs:
             }
           }
 
-          # Dump full output
-          Write-Host "`n=== FULL STDOUT ==="
-          if (Test-Path "sidecar_stdout.txt") { Get-Content "sidecar_stdout.txt" }
           Write-Host "`n=== FULL STDERR ==="
           if (Test-Path "sidecar_stderr.txt") { Get-Content "sidecar_stderr.txt" }
           Write-Host "`n=== Process exited: $($proc.HasExited), exit code: $($proc.ExitCode) ==="
-
-          # Cleanup
           Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 
           if (-not $healthy) {
-            Write-Host "::warning::Sidecar health check did not pass within 90 seconds"
+            Write-Host "::error::Backend health check failed"
+            exit 1
           }
-
-      - name: Rename sidecar with target triple
-        shell: pwsh
-        run: |
-          Move-Item "frontend/src-tauri/neurareport-backend.exe" `
-                    "frontend/src-tauri/neurareport-backend-x86_64-pc-windows-msvc.exe"
 
       - name: Build Tauri desktop app
         working-directory: frontend
@@ -227,11 +190,8 @@ jobs:
           pip install -r backend/requirements-desktop.txt
           pip install pyinstaller
 
-      - name: Build backend sidecar (PyInstaller)
+      - name: Build backend (PyInstaller onedir)
         run: python -m PyInstaller backend/neurareport-backend.spec --distpath frontend/src-tauri/ --noconfirm --clean
-
-      - name: Rename sidecar with target triple
-        run: mv frontend/src-tauri/neurareport-backend frontend/src-tauri/neurareport-backend-x86_64-unknown-linux-gnu
 
       - name: Build Tauri desktop app
         working-directory: frontend

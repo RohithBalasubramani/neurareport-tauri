@@ -476,7 +476,6 @@ FRONTEND_API_CALLS = {
     "synthesis/getSession": ("GET", "/synthesis/sessions/{session_id}"),
     "synthesis/deleteSession": ("DELETE", "/synthesis/sessions/{session_id}"),
     "synthesis/addDocument": ("POST", "/synthesis/sessions/{session_id}/documents"),
-    "synthesis/extractDocument": ("POST", "/synthesis/documents/extract"),
     "synthesis/removeDocument": ("DELETE", "/synthesis/sessions/{session_id}/documents/{document_id}"),
     "synthesis/findInconsistencies": ("GET", "/synthesis/sessions/{session_id}/inconsistencies"),
     "synthesis/synthesize": ("POST", "/synthesis/sessions/{session_id}/synthesize"),

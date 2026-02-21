@@ -35,8 +35,8 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": [
-      "neurareport-backend"
+    "resources": [
+      "neurareport-backend/**/*"
     ],
     "windows": {
       "nsis": {

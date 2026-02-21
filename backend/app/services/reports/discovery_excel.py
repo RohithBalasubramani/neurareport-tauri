@@ -71,6 +71,17 @@ def _infer_primary_table(mapping_section: Mapping[str, str] | None) -> str | Non
     return seen[0] if seen else None
 
 
+def _snap_end_of_day(dt: datetime) -> datetime:
+    """If *dt* has no time component (midnight), snap to 23:59:59.999999.
+
+    This ensures date-only end-dates like ``2026-02-19`` include all
+    records on that day instead of only those at exactly midnight.
+    """
+    if dt.hour == 0 and dt.minute == 0 and dt.second == 0 and dt.microsecond == 0:
+        return dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return dt
+
+
 def _parse_date_like(value) -> datetime | None:
     if value is None:
         return None
@@ -129,6 +140,7 @@ def _apply_date_filter(df: pd.DataFrame, column: str, start: str, end: str) -> p
     end_dt = _parse_date_like(end)
     if start_dt is None or end_dt is None:
         return df
+    end_dt = _snap_end_of_day(end_dt)
     dt_series = _coerce_datetime_series(df[column])
     mask = (dt_series >= start_dt) & (dt_series <= end_dt)
     return df.loc[mask.fillna(False)]

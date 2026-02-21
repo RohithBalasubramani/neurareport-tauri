@@ -5,6 +5,7 @@ import hashlib
 import importlib
 import json
 import logging
+import re
 from typing import Any, Iterator, Optional
 
 from fastapi import HTTPException, Request
@@ -86,8 +87,11 @@ def _mapping_preview_pipeline(
     except Exception:
         logger.warning("rich_catalog_build_degraded", extra={"template_id": template_id})
 
+    # Extract header labels from template HTML for table-matching heuristic
+    _header_hints = re.findall(r'data-label="([^"]+)"', template_html)
+
     try:
-        schema_info = get_parent_child_info_fn(db_path)
+        schema_info = get_parent_child_info_fn(db_path, header_hints=_header_hints)
     except Exception as exc:
         logger.warning(
             "mapping_preview_schema_probe_degraded",

@@ -2,8 +2,8 @@
 Comprehensive Tests for ALL V2 Agents (lines 369-380)
 
 Covers the 4 NEW agents (data_analyst, email_draft, content_repurpose,
-proofreading) and the agent_service orchestration layer wiring all 6
-agent types (including report_analyst).
+proofreading) and the agent_service orchestration layer wiring all 5
+agent types.
 
 7-layer test structure:
 1. Unit Tests — Input validation, output models, local computation
@@ -410,7 +410,7 @@ class TestProofreadingLocalReadability:
 # =============================================================================
 
 class TestAgentServiceWiring:
-    """Test that all 6 agent types are wired correctly in AgentService."""
+    """Test that all 5 agent types are wired correctly in AgentService."""
 
     def test_all_agent_types_registered(self):
         from backend.app.services.agents.agent_service import AgentService
@@ -420,7 +420,6 @@ class TestAgentServiceWiring:
         assert AgentType.EMAIL_DRAFT in service._agents
         assert AgentType.CONTENT_REPURPOSE in service._agents
         assert AgentType.PROOFREADING in service._agents
-        assert AgentType.REPORT_ANALYST in service._agents
 
     def test_build_agent_kwargs_research(self):
         from backend.app.services.agents.agent_service import AgentService
@@ -478,7 +477,7 @@ class TestAgentServiceWiring:
 
 
 class TestRepositoryAllAgentTypes:
-    """Test repository works correctly for all 6 agent types."""
+    """Test repository works correctly for all 5 agent types."""
 
     @pytest.mark.parametrize("agent_type", list(AgentType))
     def test_create_task_for_each_agent_type(self, repository, agent_type):
@@ -536,8 +535,8 @@ class TestPropertyBased:
     """Property-based tests for invariants across all agents."""
 
     def test_all_agent_types_in_enum(self):
-        """All 6 agent types must be in the AgentType enum."""
-        expected = {"research", "data_analyst", "email_draft", "content_repurpose", "proofreading", "report_analyst"}
+        """All 5 agent types must be in the AgentType enum."""
+        expected = {"research", "data_analyst", "email_draft", "content_repurpose", "proofreading"}
         actual = {t.value for t in AgentType}
         assert expected == actual
 
@@ -714,8 +713,8 @@ class TestConcurrencyAllAgents:
             t.join()
 
         assert len(errors) == 0
-        assert len(created_ids) == 60  # 6 types * 10 each
-        assert len(set(created_ids)) == 60
+        assert len(created_ids) == 50  # 5 types * 10 each
+        assert len(set(created_ids)) == 50
 
     def test_idempotency_across_agent_types(self, repository):
         """Idempotency keys are scoped — same key for different types should both succeed."""
@@ -804,8 +803,8 @@ class TestSecurityAllAgents:
         user_a_tasks = repository.list_tasks(user_id="user_A")
         user_b_tasks = repository.list_tasks(user_id="user_B")
 
-        assert len(user_a_tasks) == 6  # one per agent type
-        assert len(user_b_tasks) == 6
+        assert len(user_a_tasks) == 5  # one per agent type
+        assert len(user_b_tasks) == 5
 
 
 # =============================================================================
@@ -866,11 +865,11 @@ class TestUsabilityAllAgents:
         except ValueError as e:
             assert "Style guide must be one of" in str(e)
 
-    def test_agent_types_endpoint_has_all_six(self):
-        """The agent types data structure should list all 6 agents."""
+    def test_agent_types_endpoint_has_all_five(self):
+        """The agent types data structure should list all 5 agents."""
         from backend.app.services.agents.agent_service import AgentService
         service = AgentService()
-        assert len(service._agents) == 6
+        assert len(service._agents) == 5
 
     def test_default_values_sensible(self):
         """Default values should produce usable inputs."""
@@ -1073,11 +1072,11 @@ class TestServiceAsyncExecution:
 # =============================================================================
 
 class TestDestructiveScenario1:
-    """Scenario 1: All 6 agents fail simultaneously with mixed error types."""
+    """Scenario 1: All 5 agents fail simultaneously with mixed error types."""
 
     @pytest.mark.asyncio
     async def test_all_agents_fail_no_crash(self, repository):
-        """Fire all 6 agents with different error types; system must not crash."""
+        """Fire all 5 agents with different error types; system must not crash."""
         from backend.app.services.agents.agent_service import AgentService
 
         service = AgentService(repository=repository)
@@ -1088,7 +1087,6 @@ class TestDestructiveScenario1:
             LLMResponseError("JSON malformed"),
             ValidationError("bad input", field="topic"),
             RuntimeError("Segfault simulation"),
-            AgentError("Report analyst failure", code="REPORT_ERROR", retryable=True),
         ]
         agent_types = list(AgentType)
 
@@ -1220,10 +1218,10 @@ class TestDestructiveScenario3:
                 repository.fail_task(task.task_id, error_message="Oops", is_retryable=False)
 
         stats = repository.get_stats()
-        assert stats["total"] == 18  # 6 types * 3 each
-        assert stats["completed"] == 6
-        assert stats["failed"] == 6
-        assert stats["pending"] == 6
+        assert stats["total"] == 15  # 5 types * 3 each
+        assert stats["completed"] == 5
+        assert stats["failed"] == 5
+        assert stats["pending"] == 5
 
 
 if __name__ == "__main__":

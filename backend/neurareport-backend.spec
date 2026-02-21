@@ -183,14 +183,22 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+# One-dir mode: exe is a small launcher, COLLECT gathers all files into a folder.
+# This avoids one-file CArchive/PYZ extraction issues on Windows.
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='neurareport-backend',
     strip=False,
     upx=True,
-    console=True,  # Required for sidecar stdout/stderr capture by Tauri
+    console=True,  # Required for stdout/stderr capture by Tauri
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    name='neurareport-backend',
 )

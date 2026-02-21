@@ -7,16 +7,6 @@
     "process:allow-exit",
     "process:allow-restart",
     {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "neurareport-backend",
-          "sidecar": true,
-          "args": true
-        }
-      ]
-    },
-    {
       "identifier": "shell:allow-open",
       "allow": [
         { "url": "http*://*" }

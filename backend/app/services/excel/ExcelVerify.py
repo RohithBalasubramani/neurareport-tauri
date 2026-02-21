@@ -59,6 +59,71 @@ def _row_has_values(values) -> bool:
     return False
 
 
+def _is_numeric_cell(text: str) -> bool:
+    try:
+        float(text.replace(",", ""))
+        return True
+    except ValueError:
+        return False
+
+
+def _is_sequential_numbers(cells: list[str]) -> bool:
+    if len(cells) < 3:
+        return False
+    try:
+        nums = [int(float(c)) for c in cells]
+        return nums == list(range(nums[0], nums[0] + len(nums)))
+    except (ValueError, TypeError):
+        return False
+
+
+def _detect_header_row(rows: list[tuple], *, max_scan: int = 10) -> int:
+    """Score rows 0..max_scan and return the index of the best header row.
+
+    Signals: unique text count, all-numeric penalty, sequential number penalty,
+    merged-cell penalty, row position bonus.
+    """
+    best_index = -1
+    best_score = float("-inf")
+
+    for idx, row in enumerate(rows[:max_scan]):
+        if not _row_has_values(row):
+            continue
+        cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
+        if not cells:
+            continue
+        score = 0.0
+
+        # Signal 1: Unique text count — headers have many distinct labels
+        unique_text = len(set(c.lower() for c in cells))
+        score += min(unique_text, 15) * 2.0
+
+        # Signal 2: All-numeric penalty
+        numeric_count = sum(1 for c in cells if _is_numeric_cell(c))
+        if len(cells) > 0 and numeric_count / len(cells) > 0.8:
+            score -= 20.0
+
+        # Signal 3: Sequential number penalty
+        if _is_sequential_numbers(cells):
+            score -= 15.0
+
+        # Signal 4: Merged-cell penalty — title rows have few cells spanning many columns
+        non_empty = len(cells)
+        total_cols = len(row)
+        if total_cols > 3 and non_empty <= 2:
+            score -= 10.0
+
+        # Signal 5: Row position bonus
+        if 1 <= idx <= 5:
+            score += 1.0
+
+        if score > best_score:
+            best_score = score
+            best_index = idx
+
+    return best_index if best_index >= 0 else 0
+
+
 def _ensure_label(value: object, idx: int) -> str:
     if value not in (None, ""):
         text = str(value).strip()
@@ -94,16 +159,8 @@ def _build_placeholder_samples(tokens: list[str], data_row: list[str]) -> dict[s
 
 def _sheet_snapshot_for_llm(sheet, *, max_rows: int = 20, max_preface_rows: int = 6) -> tuple[dict[str, Any], list[dict[str, Any]], list[str], int]:
     rows = list(sheet.iter_rows(values_only=True))
-    header_row = None
-    header_index = -1
-    for idx, row in enumerate(rows):
-        if _row_has_values(row):
-            header_row = row
-            header_index = idx
-            break
-    if header_row is None:
-        header_row = []
-        header_index = -1
+    header_index = _detect_header_row(rows)
+    header_row = rows[header_index] if header_index < len(rows) else []
 
     header_labels = [_ensure_label(value, idx) for idx, value in enumerate(header_row)]
     preface_rows = rows[: max(header_index, 0)]
@@ -128,8 +185,14 @@ def _sheet_snapshot_for_llm(sheet, *, max_rows: int = 20, max_preface_rows: int 
         )
 
     token_plan: list[dict[str, Any]] = []
+    seen_tokens: dict[str, int] = {}
     for idx, label in enumerate(header_labels):
         norm = _normalize_token(label) or f"col_{idx + 1}"
+        if norm in seen_tokens:
+            seen_tokens[norm] += 1
+            norm = f"{norm}_{seen_tokens[norm]}"
+        else:
+            seen_tokens[norm] = 1
         token_name = f"row_{norm}"
         sample_value = ""
         if sample_rows and idx < len(sample_rows[0]["cells"]):
@@ -170,13 +233,8 @@ def _sheet_snapshot_for_llm(sheet, *, max_rows: int = 20, max_preface_rows: int 
 
 def _sheet_to_placeholder_html(sheet) -> tuple[str, list[str], list[str]]:
     rows = list(sheet.iter_rows(values_only=True))
-    header_row = None
-    header_index = -1
-    for idx, row in enumerate(rows):
-        if _row_has_values(row):
-            header_row = row
-            header_index = idx
-            break
+    header_index = _detect_header_row(rows)
+    header_row = rows[header_index] if header_index < len(rows) else None
 
     placeholder_tokens: list[str] = []
     if header_row:
@@ -187,8 +245,14 @@ def _sheet_to_placeholder_html(sheet) -> tuple[str, list[str], list[str]]:
     placeholder_tokens = []
     placeholder_cells: list[str] = []
     data_labels: list[str] = []
+    seen_tokens: dict[str, int] = {}
     for idx, label in enumerate(header_labels):
         norm = _normalize_token(label) or f"col_{idx + 1}"
+        if norm in seen_tokens:
+            seen_tokens[norm] += 1
+            norm = f"{norm}_{seen_tokens[norm]}"
+        else:
+            seen_tokens[norm] = 1
         token = f"row_{norm}"
         placeholder_tokens.append(token)
         placeholder_cells.append("<td>{" + token + "}</td>")
@@ -270,16 +334,8 @@ def _sheet_to_reference_html(sheet, *, max_rows: int = 5) -> str:
     """
     rows = list(sheet.iter_rows(values_only=True))
 
-    header_row = None
-    header_index = -1
-    for i, row in enumerate(rows):
-        if _row_has_values(row):
-            header_row = row
-            header_index = i
-            break
-    if header_row is None:
-        header_row = []
-        header_index = -1
+    header_index = _detect_header_row(rows)
+    header_row = rows[header_index] if header_index < len(rows) else []
 
     header_labels = [_ensure_label(value, idx) for idx, value in enumerate(header_row)]
 

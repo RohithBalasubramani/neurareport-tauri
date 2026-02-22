@@ -270,7 +270,7 @@ exe = EXE(
     name='neurareport-backend',
     strip=False,
     upx=True,
-    console=True,  # Required for stdout/stderr capture by Tauri
+    console=False,  # No visible CMD window; Tauri captures stdout/stderr via Stdio::piped()
 )
 
 coll = COLLECT(

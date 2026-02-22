@@ -143,12 +143,20 @@ pub fn run() {
 
                 use std::process::{Command, Stdio};
 
-                match Command::new(&backend_exe)
-                    .args(["--port", &port.to_string()])
+                let mut cmd = Command::new(&backend_exe);
+                cmd.args(["--port", &port.to_string()])
                     .env("PYTHONUNBUFFERED", "1")
                     .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
+                    .stderr(Stdio::piped());
+
+                // Hide the console window on Windows
+                #[cfg(target_os = "windows")]
+                {
+                    use std::os::windows::process::CommandExt;
+                    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                }
+
+                match cmd.spawn()
                 {
                     Ok(mut child) => {
                         log("[tauri] Backend process spawned successfully");

@@ -47,7 +47,7 @@ try:
     # Ensure backend is importable from the spec
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
-    from PyInstaller.utils.hooks import collect_submodules
+    from PyInstaller.utils.hooks import collect_submodules, collect_data_files
     _collected = collect_submodules('backend')
     print(f"[SPEC DEBUG] collect_submodules found {len(_collected)} modules")
     _collected_repo = [m for m in _collected if 'repositor' in m or '.state' in m]
@@ -93,10 +93,24 @@ hidden_imports = _all_mods + [
     'starlette.routing',
     'starlette.middleware',
     'starlette.middleware.cors',
+    # Playwright (PDF generation via bundled Chromium)
+    'playwright',
+    'playwright.sync_api',
+    'playwright.async_api',
+    'playwright._impl',
+    'playwright._impl._driver',
 ]
 
 # --- Data files needed at runtime ---
 datas = []
+
+# Playwright driver (node binary + scripts) — needed for PDF generation
+try:
+    _pw_datas = collect_data_files('playwright', include_py_files=False)
+    datas.extend(_pw_datas)
+    print(f"[SPEC DEBUG] Playwright data files: {len(_pw_datas)} entries")
+except Exception as e:
+    print(f"[SPEC DEBUG] Playwright data collection skipped: {e}")
 
 # JSON schemas loaded at module level by validation.py
 schemas_dir = backend_dir / 'app' / 'schemas'
@@ -169,7 +183,7 @@ a = Analysis(
         'sklearn',
         'scikit-learn',
         'statsmodels',
-        'playwright',
+        # 'playwright' — INCLUDED for PDF generation
         'opentelemetry',
         'prometheus_client',
         'sentry_sdk',

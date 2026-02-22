@@ -37,16 +37,34 @@ def _acquire_lock(lock_path: Path, *, timeout: float, poll_interval: float) -> F
     return lock
 
 
-@contextmanager
+class _EagerTemplateLock:
+    """Context manager that acquires a file lock eagerly (at construction time).
+
+    Unlike @contextmanager generators which defer to __enter__, this acquires
+    the lock immediately so callers can catch TemplateLockError at the call site.
+    """
+
+    def __init__(self, lock: FileLock):
+        self._lock = lock
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self._lock.release()
+
+
 def acquire_template_lock(
     template_dir: Path,
     name: str,
     correlation_id: str | None = None,
-    timeout: float = 30.0,
-) -> Generator[None, None, None]:
+    timeout: float = 900.0,
+) -> _EagerTemplateLock:
     """
-    Context manager for template locking.
-    Prevents concurrent modifications to the same template.
+    Acquire a template lock and return a context manager for releasing it.
+
+    The lock is acquired immediately (not deferred to __enter__), so callers
+    can catch TemplateLockError at the call site with try/except.
 
     Args:
         template_dir: Directory containing the template
@@ -58,8 +76,10 @@ def acquire_template_lock(
         TemplateLockError: If lock cannot be acquired within timeout
     """
     if not _locks_enabled():
-        yield
-        return
+        @contextmanager
+        def _noop():
+            yield
+        return _noop()
 
     lock_path = Path(template_dir) / f".lock.{name}"
     holder = f"pid={os.getpid()}"
@@ -84,10 +104,7 @@ def acquire_template_lock(
             lock_holder="unknown",
         ) from exc
 
-    try:
-        yield
-    finally:
-        lock.release()
+    return _EagerTemplateLock(lock)
 
 
 @contextmanager

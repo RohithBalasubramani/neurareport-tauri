@@ -71,6 +71,8 @@ class ErrorClassifier:
         (r"too many connections", ErrorCategory.RESOURCE),
         (r"deadlock", ErrorCategory.TRANSIENT),
         (r"lock wait timeout", ErrorCategory.TIMEOUT),
+        (r"template lock", ErrorCategory.TRANSIENT),
+        (r"file lock.*could not be acquired", ErrorCategory.TRANSIENT),
         (r"could not connect to server", ErrorCategory.TRANSIENT),
 
         # Browser/rendering issues (often transient)

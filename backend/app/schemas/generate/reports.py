@@ -14,7 +14,7 @@ class RunPayload(BaseModel):
     key_values: Optional[dict[str, Any]] = None
     brand_kit_id: Optional[str] = None
     docx: bool = False
-    xlsx: bool = False
+    xlsx: Optional[bool] = None
     email_recipients: Optional[list[str]] = None
     email_subject: Optional[str] = None
     email_message: Optional[str] = None

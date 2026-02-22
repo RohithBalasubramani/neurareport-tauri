@@ -51,11 +51,15 @@ async def test_connection(
 @router.get("")
 async def list_connections(
     request: Request,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     svc: ConnectionService = Depends(get_service),
 ):
     try:
         connections = svc.list(_corr(request))
-        return {"status": "ok", "connections": connections, "correlation_id": _corr(request)}
+        total = len(connections)
+        connections = connections[offset : offset + limit]
+        return {"status": "ok", "connections": connections, "total": total, "correlation_id": _corr(request)}
     except (HTTPException, AppError):
         raise
     except Exception as exc:

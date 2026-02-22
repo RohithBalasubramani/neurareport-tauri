@@ -143,6 +143,7 @@ def _build_v1_router() -> APIRouter:
 
     # User preferences, favorites, notifications
     v1.include_router(settings.router, prefix="/settings", tags=["settings"])
+    v1.include_router(settings.preferences_router, prefix="/preferences", tags=["preferences"])
     v1.include_router(favorites.router, prefix="/favorites", tags=["favorites"])
     v1.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 

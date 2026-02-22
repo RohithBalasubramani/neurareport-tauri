@@ -180,9 +180,37 @@ async def _persist_upload(file: UploadFile, suffix: str) -> tuple[Path, str]:
 # =============================================================================
 
 @router.get("")
-def list_templates_route(request: Request, status: Optional[str] = None):
-    """List all templates with optional status filter."""
-    return list_templates(status, request)
+def list_templates_route(
+    request: Request,
+    status: Optional[str] = None,
+    kind: Optional[str] = Query(None, description="Filter by template kind (pdf, excel)"),
+    q: Optional[str] = Query(None, description="Search templates by name"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """List all templates with optional status, kind, search, and pagination filters."""
+    result = list_templates(status, request)
+    templates = result.get("templates", [])
+    # Strict status filter (legacy service may treat 'active' as 'approved')
+    if status:
+        status_lower = status.strip().lower()
+        templates = [t for t in templates if (t.get("status") or "").lower() == status_lower]
+    # Apply kind filter
+    if kind:
+        kind_lower = kind.strip().lower()
+        templates = [t for t in templates if (t.get("kind") or "pdf").lower() == kind_lower]
+    # Apply search filter
+    if q:
+        q_lower = q.strip().lower()
+        templates = [t for t in templates if q_lower in (t.get("name") or "").lower() or q_lower in (t.get("description") or "").lower()]
+    total = len(templates)
+    # Apply pagination
+    templates = templates[offset:offset + limit]
+    result["templates"] = templates
+    result["total"] = total
+    result["limit"] = limit
+    result["offset"] = offset
+    return result
 
 
 @router.get("/catalog")
@@ -246,6 +274,13 @@ def create_template_from_chat_route(payload: TemplateCreateFromChatPayload, requ
 # =============================================================================
 # Template CRUD
 # =============================================================================
+
+@router.get("/{template_id}")
+def get_template_route(template_id: str, request: Request):
+    """Get a single template by ID."""
+    normalized, record = _ensure_template_exists(template_id)
+    return {"status": "ok", "template": record, "correlation_id": _correlation(request)}
+
 
 @router.delete("/{template_id}")
 def delete_template_route(template_id: str, request: Request):

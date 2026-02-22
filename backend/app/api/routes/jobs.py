@@ -60,11 +60,19 @@ def list_jobs_route(
     status: Optional[List[str]] = Query(None),
     job_type: Optional[List[str]] = Query(None, alias="type"),
     limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     active_only: bool = Query(False),
 ):
     """List jobs with optional filtering by status and type."""
-    jobs = list_jobs(status, job_type, limit, active_only)
-    normalized_jobs = [_normalize_job(job) for job in jobs] if jobs else []
+    # Normalize "completed" → "succeeded" for user convenience
+    if status:
+        status = [("succeeded" if s.lower() == "completed" else s) for s in status]
+    # Fetch more than needed to support offset
+    fetch_limit = limit + offset
+    jobs = list_jobs(status, job_type, fetch_limit, active_only)
+    # Apply offset
+    jobs = (jobs or [])[offset:]
+    normalized_jobs = [_normalize_job(job) for job in jobs]
     return {"jobs": normalized_jobs, "correlation_id": _correlation(request)}
 
 
@@ -180,12 +188,45 @@ def delete_from_dlq_route(job_id: str, request: Request):
 def get_job_route(job_id: str, request: Request):
     """Get details for a specific job."""
     job = get_job(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail={"status": "error", "code": "job_not_found", "message": "Job not found"},
+        )
     return {"job": _normalize_job(job), "correlation_id": _correlation(request)}
+
+
+@router.delete("/{job_id}")
+def delete_job_route(job_id: str, request: Request):
+    """Delete a job record."""
+    deleted = state_access.delete_job(job_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail={"status": "error", "code": "job_not_found", "message": "Job not found"},
+        )
+    return {"status": "ok", "job_id": job_id, "correlation_id": _correlation(request)}
 
 
 @router.post("/{job_id}/cancel")
 def cancel_job_route(job_id: str, request: Request, force: bool = Query(False)):
-    """Cancel a running job."""
+    """Cancel a running job. Cannot cancel already-completed jobs."""
+    existing = get_job(job_id)
+    if not existing:
+        raise HTTPException(
+            status_code=404,
+            detail={"status": "error", "code": "job_not_found", "message": "Job not found"},
+        )
+    status = _normalize_job_status(existing.get("status"))
+    if status in ("succeeded", "completed", "failed", "cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "status": "error",
+                "code": "job_already_terminal",
+                "message": f"Cannot cancel job with status '{status}'. Only active jobs can be cancelled.",
+            },
+        )
     job = cancel_job(job_id, force=force)
     return {"job": _normalize_job(job), "correlation_id": _correlation(request)}
 

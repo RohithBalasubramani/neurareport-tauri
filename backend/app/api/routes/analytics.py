@@ -50,10 +50,10 @@ def _get_date_bucket(date_str: Optional[str], bucket: str = "day") -> Optional[s
 async def get_dashboard_analytics() -> Dict[str, Any]:
     """Get comprehensive dashboard analytics."""
 
-    # Get all data from state store
+    # Get all data from state store (limit=0 → no cap)
     connections = state_access.list_connections()
     templates = state_access.list_templates()
-    jobs = state_access.list_jobs()
+    jobs = state_access.list_jobs(limit=0)
     schedules = state_access.list_schedules()
 
     # Calculate time boundaries
@@ -203,7 +203,7 @@ async def get_usage_statistics(
 ) -> Dict[str, Any]:
     """Get detailed usage statistics over time."""
 
-    jobs = state_access.list_jobs()
+    jobs = state_access.list_jobs(limit=0)
     templates = state_access.list_templates()
 
     now = datetime.now(timezone.utc)
@@ -219,10 +219,10 @@ async def get_usage_statistics(
         start_date = now - timedelta(days=30)
         bucket = "day"
 
-    # Filter jobs in date range
+    # Filter jobs in date range — support both camelCase and snake_case keys
     filtered_jobs = []
     for job in jobs:
-        created = _parse_iso(job.get("created_at"))
+        created = _parse_iso(job.get("createdAt") or job.get("created_at"))
         if created and created >= start_date:
             filtered_jobs.append(job)
 
@@ -232,17 +232,17 @@ async def get_usage_statistics(
         status = _normalize_job_status(job.get("status"))
         by_status[status] = by_status.get(status, 0) + 1
 
-    # Group by template kind
+    # Group by template kind — support camelCase and snake_case
     by_kind = {"pdf": 0, "excel": 0}
     for job in filtered_jobs:
-        kind = job.get("template_kind", "pdf")
+        kind = job.get("templateKind") or job.get("template_kind") or "pdf"
         by_kind[kind] = by_kind.get(kind, 0) + 1
 
     # Group by template
     by_template = {}
     for job in filtered_jobs:
-        tid = job.get("template_id", "unknown")
-        tname = job.get("template_name") or tid[:12]
+        tid = job.get("templateId") or job.get("template_id") or "unknown"
+        tname = job.get("templateName") or job.get("template_name") or tid[:12]
         if tid not in by_template:
             by_template[tid] = {"name": tname, "count": 0}
         by_template[tid]["count"] += 1

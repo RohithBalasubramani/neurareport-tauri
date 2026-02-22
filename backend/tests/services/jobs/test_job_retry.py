@@ -450,3 +450,62 @@ class TestRealWorldScenarios:
 
         job = state_store.get_job(job["id"])
         assert job["status"] == "pending_retry"
+
+
+class TestUpdateJob:
+    """Tests for the generic update_job() method."""
+
+    def test_update_single_field(self, state_store: StateStore):
+        job = state_store.create_job(job_type="run_report", template_id="t1")
+        updated = state_store.update_job(job["id"], status="cancelled")
+        assert updated is not None
+        assert updated["status"] == "cancelled"
+
+    def test_update_multiple_fields(self, state_store: StateStore):
+        job = state_store.create_job(job_type="run_report", template_id="t1")
+        updated = state_store.update_job(job["id"], status="failed", error="timeout")
+        assert updated["status"] == "failed"
+        assert updated["error"] == "timeout"
+
+    def test_update_nonexistent_job_returns_none(self, state_store: StateStore):
+        result = state_store.update_job("nonexistent-id", status="cancelled")
+        assert result is None
+
+    def test_update_no_fields_returns_current(self, state_store: StateStore):
+        job = state_store.create_job(job_type="run_report", template_id="t1")
+        result = state_store.update_job(job["id"])
+        assert result is not None
+        assert result["id"] == job["id"]
+
+    def test_update_persists(self, state_store: StateStore):
+        job = state_store.create_job(job_type="run_report", template_id="t1")
+        state_store.update_job(job["id"], status="cancelled")
+        refreshed = state_store.get_job(job["id"])
+        assert refreshed["status"] == "cancelled"
+
+
+class TestDeleteJob:
+    """Tests for the delete_job() method."""
+
+    def test_delete_existing_job(self, state_store: StateStore):
+        job = state_store.create_job(job_type="run_report", template_id="t1")
+        assert state_store.delete_job(job["id"]) is True
+        assert state_store.get_job(job["id"]) is None
+
+    def test_delete_nonexistent_job_returns_false(self, state_store: StateStore):
+        assert state_store.delete_job("nonexistent-id") is False
+
+    def test_delete_does_not_affect_other_jobs(self, state_store: StateStore):
+        job1 = state_store.create_job(job_type="run_report", template_id="t1")
+        job2 = state_store.create_job(job_type="run_report", template_id="t2")
+        state_store.delete_job(job1["id"])
+        assert state_store.get_job(job1["id"]) is None
+        assert state_store.get_job(job2["id"]) is not None
+
+    def test_delete_reduces_job_count(self, state_store: StateStore):
+        job1 = state_store.create_job(job_type="run_report", template_id="t1")
+        job2 = state_store.create_job(job_type="run_report", template_id="t2")
+        before = state_store.list_jobs()
+        state_store.delete_job(job1["id"])
+        after = state_store.list_jobs()
+        assert len(after) == len(before) - 1

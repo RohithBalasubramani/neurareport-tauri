@@ -73,6 +73,8 @@ class WorkflowTrigger(BaseModel):
 
 class CreateWorkflowRequest(BaseModel):
     """Request to create a workflow."""
+    model_config = {"extra": "forbid"}
+
     name: str
     description: Optional[str] = None
     nodes: list[WorkflowNode] = Field(default_factory=list)

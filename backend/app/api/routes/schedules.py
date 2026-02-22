@@ -54,6 +54,11 @@ def list_report_schedules(request: Request):
 @router.post("")
 async def create_report_schedule(payload: ScheduleCreatePayload, request: Request):
     """Create a new report schedule."""
+    if payload.interval_minutes is not None and payload.interval_minutes < 1:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "error", "code": "invalid_interval", "message": "interval_minutes must be a positive integer (>= 1), or omit to use frequency default."},
+        )
     schedule = create_schedule(payload)
     await _refresh_scheduler()
     return {"schedule": schedule, "correlation_id": _correlation(request)}

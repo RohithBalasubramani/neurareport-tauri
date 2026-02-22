@@ -337,11 +337,12 @@ class DuckDBDataFrameQuery:
             )
             """
         )
-        # Alias the macros to the SQLite function names so legacy SQL keeps working.
+        # Alias datetime to the shim so legacy SQL keeps working.
+        # NOTE: We do NOT alias strftime → sqlite_strftime because
+        # sqlite_strftime internally calls STRFTIME(), and a macro alias
+        # would shadow DuckDB's built-in, causing infinite recursion.
+        # The _rewrite_sql() regex already converts strftime( → sqlite_strftime(.
         self._conn.execute("CREATE MACRO IF NOT EXISTS datetime(x) AS sqlite_datetime(x)")
-        self._conn.execute(
-            "CREATE MACRO IF NOT EXISTS strftime(fmt, value, modifier := NULL) AS sqlite_strftime(fmt, value, modifier)"
-        )
 
     def execute(self, sql: str, params: Any | None = None) -> pd.DataFrame:
         prepared_sql, ordered_params = _normalize_params(sql, params)

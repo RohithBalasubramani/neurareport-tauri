@@ -33,14 +33,61 @@ def _correlation(request: Request) -> str | None:
 
 @router.post("/run")
 def run_report(payload: RunPayload, request: Request):
-    """Run a PDF report synchronously."""
-    return run_report_service(payload, request, kind="pdf")
+    """Run a report synchronously. Auto-detects kind from template record."""
+    import backend.app.services.state_access as state_access
+
+    rec = state_access.get_template_record(payload.template_id)
+    if not rec:
+        raise HTTPException(
+            status_code=404,
+            detail={"status": "error", "code": "template_not_found", "message": f"Template '{payload.template_id}' not found."},
+        )
+    kind = str(rec.get("kind") or "pdf").strip().lower() or "pdf"
+    # Validate connection_id exists
+    if payload.connection_id:
+        conn = state_access.get_connection_record(payload.connection_id)
+        if not conn:
+            raise HTTPException(
+                status_code=404,
+                detail={"status": "error", "code": "connection_not_found", "message": f"Connection '{payload.connection_id}' not found."},
+            )
+    try:
+        return run_report_service(payload, request, kind=kind)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        import logging
+        logging.getLogger("neura.api").exception("report_generation_failed", extra={"template_id": payload.template_id, "kind": kind})
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "code": "report_generation_failed", "message": f"Report generation failed for kind={kind}: {type(exc).__name__}"},
+        )
 
 
 @router.post("/jobs/run-report")
 async def enqueue_report_job(payload: RunPayload | list[RunPayload], request: Request):
-    """Queue a PDF report job for async generation."""
-    return await queue_report_job(payload, request, kind="pdf")
+    """Queue a report job for async generation.
+
+    Auto-detects the template kind (pdf/excel) from the template record.
+    """
+    import backend.app.services.state_access as state_access
+
+    payloads = payload if isinstance(payload, list) else [payload]
+    kinds = set()
+    for item in payloads:
+        rec = state_access.get_template_record(item.template_id) or {}
+        kinds.add(str(rec.get("kind") or "pdf").strip().lower() or "pdf")
+    if len(kinds) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "status": "error",
+                "code": "mixed_template_kinds",
+                "message": "All runs in a batch must share the same template kind.",
+            },
+        )
+    kind = next(iter(kinds)) if kinds else "pdf"
+    return await queue_report_job(payload, request, kind=kind)
 
 
 # =============================================================================

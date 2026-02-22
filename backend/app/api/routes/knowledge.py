@@ -206,6 +206,7 @@ async def list_documents(
     collection_id: Optional[str] = None,
     tags: Optional[str] = Query(None, description="Comma-separated tag names"),
     document_type: Optional[DocumentType] = None,
+    query: Optional[str] = Query(None, description="Search query to filter by title"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
@@ -218,6 +219,9 @@ async def list_documents(
         limit=limit,
         offset=offset,
     )
+    if query:
+        q_lower = query.lower()
+        docs = [d for d in docs if q_lower in (d.title or "").lower()]
     return docs
 
 

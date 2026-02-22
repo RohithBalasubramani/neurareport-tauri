@@ -193,6 +193,7 @@ async def create_document(
 async def list_documents(
     is_template: Optional[bool] = Query(None),
     tags: Optional[str] = Query(None, description="Comma-separated tags"),
+    q: Optional[str] = Query(None, description="Search documents by name"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     doc_service: DocumentService = Depends(get_document_service),
@@ -201,6 +202,52 @@ async def list_documents(
     tag_list = tags.split(",") if tags else None
     documents, total = doc_service.list_documents(
         is_template=is_template,
+        tags=tag_list,
+        limit=limit + offset if q else limit,
+        offset=0 if q else offset,
+    )
+    # Apply text search filter on name and content
+    if q:
+        q_lower = q.strip().lower()
+        def _doc_matches(d) -> bool:
+            if q_lower in (d.name or "").lower():
+                return True
+            content = d.content
+            if content:
+                if hasattr(content, "model_dump"):
+                    content = content.model_dump()
+                if isinstance(content, dict):
+                    for node in content.get("content", []):
+                        for inline in node.get("content", []):
+                            if q_lower in (inline.get("text") or "").lower():
+                                return True
+            return False
+        documents = [d for d in documents if _doc_matches(d)]
+        total = len(documents)
+        documents = documents[offset:offset + limit]
+    return DocumentListResponse(
+        documents=[DocumentResponse(**d.model_dump()) for d in documents],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
+
+
+# ============================================
+# Static-path routes (MUST be before /{document_id} to avoid shadowing)
+# ============================================
+
+@router.get("/templates", response_model=DocumentListResponse)
+async def list_templates(
+    tags: Optional[str] = Query(None, description="Comma-separated tags"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    doc_service: DocumentService = Depends(get_document_service),
+):
+    """List document templates."""
+    tag_list = tags.split(",") if tags else None
+    documents, total = doc_service.list_documents(
+        is_template=True,
         tags=tag_list,
         limit=limit,
         offset=offset,
@@ -212,6 +259,40 @@ async def list_documents(
         limit=limit,
     )
 
+
+@router.post("/templates/{template_id}/create", response_model=DocumentResponse)
+@limiter.limit(RATE_LIMIT_STANDARD)
+async def create_from_template(
+    request: Request,
+    response: Response,
+    template_id: str,
+    req: CreateFromTemplateRequest,
+    doc_service: DocumentService = Depends(get_document_service),
+):
+    """Create a new document from a template."""
+    template = doc_service.get(template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if not template.is_template:
+        raise HTTPException(status_code=400, detail="Document is not a template")
+
+    content_data = template.content
+    if hasattr(content_data, "model_dump"):
+        content_data = content_data.model_dump()
+
+    new_name = req.name if req and req.name else f"{template.name} (copy)"
+    doc = doc_service.create(
+        name=new_name,
+        content=content_data,
+        is_template=False,
+        metadata={"created_from_template": template_id},
+    )
+    return DocumentResponse(**doc.model_dump())
+
+
+# ============================================
+# Dynamic document routes (/{document_id} — MUST be after static routes)
+# ============================================
 
 @router.get("/{document_id}", response_model=DocumentResponse)
 async def get_document(
@@ -648,64 +729,6 @@ async def merge_pdfs(
     except Exception as e:
         logger.exception("pdf_merge_failed")
         raise HTTPException(status_code=500, detail="PDF merge failed")
-
-
-# ============================================
-# Template Endpoints (static routes - must be before /{document_id})
-# ============================================
-
-@router.get("/templates", response_model=DocumentListResponse)
-async def list_templates(
-    tags: Optional[str] = Query(None, description="Comma-separated tags"),
-    limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-    doc_service: DocumentService = Depends(get_document_service),
-):
-    """List document templates."""
-    tag_list = tags.split(",") if tags else None
-    documents, total = doc_service.list_documents(
-        is_template=True,
-        tags=tag_list,
-        limit=limit,
-        offset=offset,
-    )
-    return DocumentListResponse(
-        documents=[DocumentResponse(**d.model_dump()) for d in documents],
-        total=total,
-        offset=offset,
-        limit=limit,
-    )
-
-
-@router.post("/templates/{template_id}/create", response_model=DocumentResponse)
-@limiter.limit(RATE_LIMIT_STANDARD)
-async def create_from_template(
-    request: Request,
-    response: Response,
-    template_id: str,
-    req: CreateFromTemplateRequest,
-    doc_service: DocumentService = Depends(get_document_service),
-):
-    """Create a new document from a template."""
-    template = doc_service.get(template_id)
-    if not template:
-        raise HTTPException(status_code=404, detail="Template not found")
-    if not template.is_template:
-        raise HTTPException(status_code=400, detail="Document is not a template")
-
-    # Clone the template content into a new document
-    content_data = template.content
-    if hasattr(content_data, "model_dump"):
-        content_data = content_data.model_dump()
-
-    new_name = req.name if req and req.name else f"{template.name} (copy)"
-    doc = doc_service.create(
-        name=new_name,
-        content=content_data,
-        is_template=False,
-        metadata={"created_from_template": template_id},
-    )
-    return DocumentResponse(**doc.model_dump())
 
 
 # ============================================

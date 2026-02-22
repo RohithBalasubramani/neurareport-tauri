@@ -275,13 +275,20 @@ class NL2SQLService:
             row_count=len(rows),
         )
 
+        # Determine truncated: if total_count is known, compare to limit.
+        # Otherwise, if we got exactly limit rows, assume there may be more.
+        if total_count is not None:
+            truncated = total_count > request.limit
+        else:
+            truncated = len(rows) >= request.limit
+
         return QueryExecutionResult(
             columns=columns,
             rows=rows,
             row_count=len(rows),
             total_count=total_count,
             execution_time_ms=execution_time_ms,
-            truncated=total_count is not None and total_count > request.limit,
+            truncated=truncated,
         )
 
     def explain_query(

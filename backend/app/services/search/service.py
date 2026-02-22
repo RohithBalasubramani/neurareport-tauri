@@ -724,7 +724,7 @@ class SearchService:
 
         return [(doc_id, 1.0) for doc_id in all_matches]
 
-    def _get_fuzzy_terms(self, term: str, max_distance: int = 1) -> List[str]:
+    def _get_fuzzy_terms(self, term: str, max_distance: int = 2) -> List[str]:
         """Get similar terms within edit distance."""
         fuzzy_matches = []
         for indexed_term in self._inverted_index.keys():

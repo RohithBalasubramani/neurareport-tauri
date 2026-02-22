@@ -338,6 +338,38 @@ def delete_saved_chart_excel_route(
 @router.post("/reports/run")
 def run_report_excel(payload: RunPayload, request: Request):
     """Run an Excel report synchronously."""
+    # C1: docx output is not supported
+    if payload.docx:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "status": "error",
+                "code": "unsupported_format",
+                "message": "DOCX output is not supported. Use PDF or XLSX output instead.",
+            },
+        )
+    # H1: validate connection_id exists
+    if payload.connection_id:
+        conn = state_access.get_connection_record(payload.connection_id)
+        if not conn:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "status": "error",
+                    "code": "connection_not_found",
+                    "message": f"Connection '{payload.connection_id}' not found.",
+                },
+            )
+    # M4: validate date range
+    if payload.start_date and payload.end_date and payload.start_date > payload.end_date:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "status": "error",
+                "code": "invalid_date_range",
+                "message": "start_date must be before or equal to end_date.",
+            },
+        )
     return run_report_service(payload, request, kind="excel")
 
 

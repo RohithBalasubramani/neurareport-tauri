@@ -120,6 +120,7 @@ class TagResponse(BaseModel):
 class SearchRequest(BaseModel):
     """Search request model."""
     query: str
+    content: Optional[str] = None
     document_types: list[DocumentType] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     collections: list[str] = Field(default_factory=list)

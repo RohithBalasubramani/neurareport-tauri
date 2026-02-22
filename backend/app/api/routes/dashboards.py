@@ -140,20 +140,20 @@ class AddWidgetRequest(BaseModel):
     """Add widget request."""
 
     config: WidgetConfig
-    x: int = 0
-    y: int = 0
-    w: int = 4
-    h: int = 3
+    x: int = Field(0, ge=0, le=11)
+    y: int = Field(0, ge=0, le=99)
+    w: int = Field(4, ge=1, le=12)
+    h: int = Field(3, ge=1, le=20)
 
 
 class UpdateWidgetRequest(BaseModel):
     """Update widget request — all fields optional."""
 
     config: Optional[WidgetConfig] = None
-    x: Optional[int] = None
-    y: Optional[int] = None
-    w: Optional[int] = None
-    h: Optional[int] = None
+    x: Optional[int] = Field(None, ge=0, le=11)
+    y: Optional[int] = Field(None, ge=0, le=99)
+    w: Optional[int] = Field(None, ge=1, le=12)
+    h: Optional[int] = Field(None, ge=1, le=20)
 
 
 class WidgetLayoutItem(BaseModel):

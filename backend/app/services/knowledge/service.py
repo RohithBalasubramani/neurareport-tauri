@@ -70,6 +70,7 @@ class KnowledgeService:
             "id": doc_id,
             "title": request.title,
             "description": request.description,
+            "content": request.content,
             "file_path": request.file_path,
             "file_url": request.file_url,
             "document_type": request.document_type.value,

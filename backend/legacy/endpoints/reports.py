@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from backend.app.schemas.generate.reports import RunPayload  # reuse existing schemas
 from backend.legacy.services.report_service import (
     queue_report_job,
+    queue_generate_docx_job,
     run_report as run_report_service,
     list_report_runs as list_report_runs_service,
     get_report_run as get_report_run_service,
@@ -73,3 +74,9 @@ def generate_docx_route(run_id: str, request: Request):
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail={"status": "error", "code": "generate_docx_failed", "message": str(exc)})
     return {"run": run, "correlation_id": getattr(request.state, "correlation_id", None)}
+
+
+@router.post("/jobs/generate-docx/{run_id}")
+async def enqueue_generate_docx(run_id: str, request: Request):
+    """Queue a background job to convert a run's PDF to DOCX."""
+    return await queue_generate_docx_job(run_id, request)

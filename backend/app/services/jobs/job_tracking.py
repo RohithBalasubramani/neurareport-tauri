@@ -37,8 +37,7 @@ def _build_job_steps(payload: RunPayload, *, kind: str) -> list[dict[str, str]]:
         {"name": "renderPdf", "label": "Render PDF"},
     ]
     docx_requested = bool(payload.docx)
-    docx_landscape = kind == "excel"
-    if docx_requested or docx_landscape:
+    if docx_requested:
         steps.append({"name": "renderDocx", "label": "Render DOCX"})
     if kind == "excel" or bool(payload.xlsx):
         steps.append({"name": "renderXlsx", "label": "Render XLSX"})

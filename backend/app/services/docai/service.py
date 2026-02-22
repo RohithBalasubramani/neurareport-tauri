@@ -104,9 +104,10 @@ class DocAIService:
         return json.loads(text)
 
     def _check_nlp(self) -> bool:
-        """Check if NLP libraries are available."""
+        """Check if spaCy AND a language model are available."""
         try:
-            import spacy  # noqa: F401
+            import spacy
+            spacy.load("en_core_web_sm")
             return True
         except Exception:
             return False
@@ -295,7 +296,11 @@ class DocAIService:
         try:
             nlp = spacy.load("en_core_web_sm")
         except OSError:
-            return self._extract_with_regex(text, entity_types)
+            # Model not installed — delegate to LLM or regex
+            try:
+                return await self._extract_with_llm(text, entity_types)
+            except Exception:
+                return self._extract_with_regex(text, entity_types)
 
         doc = nlp(text)
         entities: List[ExtractedEntity] = []

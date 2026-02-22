@@ -468,7 +468,7 @@ def _run_report_internal(
     docx_requested = bool(p.docx)
     xlsx_requested = bool(p.xlsx)
     docx_landscape = kind == "excel"
-    docx_enabled = docx_requested or docx_landscape
+    docx_enabled = docx_requested  # DOCX is always opt-in; use /generate-docx for on-demand conversion
     xlsx_enabled = xlsx_requested or kind == "excel"
     render_strategy = RENDER_STRATEGIES.resolve("excel" if docx_landscape or xlsx_enabled else "pdf")
     _ensure_not_cancelled()
@@ -1490,6 +1490,93 @@ def generate_docx_for_run(run_id: str) -> dict:
         "docx_url": docx_url,
     })
     return updated or run
+
+
+def _run_docx_job_sync(
+    job_id: str,
+    run_id: str,
+    correlation_id: str,
+) -> None:
+    """Background worker: convert an existing run's PDF to DOCX."""
+    if _is_job_cancelled(job_id):
+        return
+    _register_job_thread(job_id)
+    store = _state_store()
+    store.update_job(job_id, status="running")
+    _publish_event_safe(
+        Event(name="job.started", payload={"job_id": job_id, "type": "generate_docx"}, correlation_id=correlation_id)
+    )
+    try:
+        result = generate_docx_for_run(run_id)
+        store.update_job(job_id, status="succeeded")
+        store.record_job_completion(job_id, status="succeeded")
+        _publish_event_safe(
+            Event(name="job.completed", payload={"job_id": job_id, "type": "generate_docx", "run_id": run_id}, correlation_id=correlation_id)
+        )
+    except (ValueError, RuntimeError) as exc:
+        error_msg = str(exc)
+        store.update_job(job_id, status="failed", error=error_msg)
+        store.record_job_completion(job_id, status="failed", error=error_msg)
+        logger.exception("docx_job_failed", extra={"event": "docx_job_failed", "job_id": job_id, "run_id": run_id})
+        _publish_event_safe(
+            Event(name="job.failed", payload={"job_id": job_id, "error": error_msg}, correlation_id=correlation_id)
+        )
+    except Exception as exc:
+        error_msg = f"Unexpected error: {type(exc).__name__}: {exc}"
+        store.update_job(job_id, status="failed", error=error_msg)
+        store.record_job_completion(job_id, status="failed", error=error_msg)
+        logger.exception("docx_job_failed", extra={"event": "docx_job_failed", "job_id": job_id, "run_id": run_id})
+    finally:
+        _clear_job_thread(job_id)
+
+
+async def queue_generate_docx_job(run_id: str, request: Request) -> dict:
+    """Queue a background job to generate DOCX from a completed run's PDF."""
+    correlation_id = getattr(request.state, "correlation_id", None) or f"docx-{uuid.uuid4().hex[:10]}"
+    store = _state_store()
+
+    # Validate the run exists and has a PDF
+    run = store.get_report_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail={"status": "error", "code": "run_not_found", "message": "Run not found."})
+    artifacts = run.get("artifacts") or {}
+    if artifacts.get("docx_url"):
+        return {"job_id": None, "run_id": run_id, "status": "already_exists", "docx_url": artifacts["docx_url"], "correlation_id": correlation_id}
+    if not artifacts.get("pdf_url"):
+        raise HTTPException(status_code=400, detail={"status": "error", "code": "no_pdf", "message": "Run has no PDF artifact to convert."})
+
+    steps = [{"name": "generateDocx", "label": "Convert PDF to DOCX"}]
+    job_record = store.create_job(
+        job_type="generate_docx",
+        template_id=run.get("template_id") or "",
+        connection_id=run.get("connection_id") or "",
+        template_name=run.get("template_name") or "DOCX Conversion",
+        template_kind="docx",
+        correlation_id=correlation_id,
+        steps=steps,
+        meta={"run_id": run_id},
+    )
+    job_id = job_record["id"]
+
+    async def _runner():
+        try:
+            future = asyncio.get_running_loop().run_in_executor(
+                REPORT_JOB_EXECUTOR,
+                _run_docx_job_sync,
+                job_id,
+                run_id,
+                correlation_id,
+            )
+            _track_job_future(job_id, future)
+            await future
+        except Exception:
+            logger.exception("docx_job_task_failed", extra={"event": "docx_job_task_failed", "job_id": job_id})
+
+    task = asyncio.create_task(_runner())
+    _track_background_task(task)
+
+    logger.info("docx_job_enqueued", extra={"event": "docx_job_enqueued", "job_id": job_id, "run_id": run_id, "correlation_id": correlation_id})
+    return {"job_id": job_id, "run_id": run_id, "status": "queued", "correlation_id": correlation_id}
 
 
 def scheduler_runner(payload: dict, kind: str, *, job_tracker: JobRunTracker | None = None) -> dict:

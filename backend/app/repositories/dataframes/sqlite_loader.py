@@ -183,6 +183,21 @@ _PARAM_PATTERN = re.compile(r":([A-Za-z_][A-Za-z0-9_]*)")
 _SQLITE_DATETIME_RE = re.compile(r"(?i)(?<!sqlite_)\bdatetime\s*\(")
 _SQLITE_STRFTIME_RE = re.compile(r"(?i)(?<!sqlite_)\bstrftime\s*\(")
 
+# Match datetime('now', '<modifier>') with SQLite modifier syntax.
+# Captures: sign (+/-), amount (digits), unit (seconds/minutes/hours/days/months/years).
+_DATETIME_NOW_MODIFIER_RE = re.compile(
+    r"""(?ix)\bdatetime\s*\(\s*'now'\s*,\s*'([+-]?\s*\d+)\s+(seconds?|minutes?|hours?|days?|months?|years?)'\s*\)"""
+)
+# Match datetime('now', 'start of <unit>') truncation modifiers.
+_DATETIME_START_OF_RE = re.compile(
+    r"""(?ix)\bdatetime\s*\(\s*'now'\s*,\s*'start\s+of\s+(month|year|day)'\s*\)"""
+)
+# Match DATE('now') or DATE('now', modifier) patterns.
+_DATE_NOW_RE = re.compile(r"""(?ix)\bDATE\s*\(\s*'now'\s*\)""")
+_DATE_NOW_MODIFIER_RE = re.compile(
+    r"""(?ix)\bDATE\s*\(\s*'now'\s*,\s*'([+-]?\s*\d+)\s+(seconds?|minutes?|hours?|days?|months?|years?)'\s*\)"""
+)
+
 
 def _normalize_params(sql: str, params: Any | None) -> tuple[str, Sequence[Any]]:
     if params is None:
@@ -204,9 +219,51 @@ def _normalize_params(sql: str, params: Any | None) -> tuple[str, Sequence[Any]]
     return sql, (params,)
 
 
+def _normalize_unit(unit: str) -> str:
+    """Normalize SQLite time unit to DuckDB INTERVAL unit (singular uppercase)."""
+    u = unit.strip().upper().rstrip("S")  # remove trailing 's' for plural
+    mapping = {"SECOND": "SECOND", "MINUTE": "MINUTE", "HOUR": "HOUR",
+               "DAY": "DAY", "MONTH": "MONTH", "YEAR": "YEAR"}
+    return mapping.get(u, u)
+
+
+def _rewrite_datetime_modifier(m: re.Match) -> str:
+    """Convert datetime('now', '+/-N unit') to DuckDB interval arithmetic."""
+    raw_amount = m.group(1).replace(" ", "")
+    unit = _normalize_unit(m.group(2))
+    amount = int(raw_amount)
+    if amount >= 0:
+        return f"(CURRENT_TIMESTAMP + INTERVAL '{amount}' {unit})"
+    else:
+        return f"(CURRENT_TIMESTAMP - INTERVAL '{-amount}' {unit})"
+
+
+def _rewrite_start_of(m: re.Match) -> str:
+    """Convert datetime('now', 'start of month') to DuckDB DATE_TRUNC."""
+    unit = m.group(1).lower()
+    return f"DATE_TRUNC('{unit}', CURRENT_TIMESTAMP)"
+
+
+def _rewrite_date_modifier(m: re.Match) -> str:
+    """Convert DATE('now', '+/-N unit') to DuckDB interval arithmetic on CURRENT_DATE."""
+    raw_amount = m.group(1).replace(" ", "")
+    unit = _normalize_unit(m.group(2))
+    amount = int(raw_amount)
+    if amount >= 0:
+        return f"(CURRENT_DATE + INTERVAL '{amount}' {unit})"
+    else:
+        return f"(CURRENT_DATE - INTERVAL '{-amount}' {unit})"
+
+
 def _rewrite_sql(sql: str) -> str:
     """Apply lightweight rewrites so legacy SQLite SQL runs in DuckDB."""
-    updated = _SQLITE_DATETIME_RE.sub("sqlite_datetime(", sql)
+    # First, rewrite multi-arg datetime/DATE patterns to DuckDB interval syntax.
+    updated = _DATETIME_NOW_MODIFIER_RE.sub(_rewrite_datetime_modifier, sql)
+    updated = _DATETIME_START_OF_RE.sub(_rewrite_start_of, updated)
+    updated = _DATE_NOW_MODIFIER_RE.sub(_rewrite_date_modifier, updated)
+    updated = _DATE_NOW_RE.sub("CURRENT_DATE", updated)
+    # Then rewrite any remaining single-arg datetime/strftime to shim macros.
+    updated = _SQLITE_DATETIME_RE.sub("sqlite_datetime(", updated)
     updated = _SQLITE_STRFTIME_RE.sub("sqlite_strftime(", updated)
     return updated
 

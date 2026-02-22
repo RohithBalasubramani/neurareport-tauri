@@ -422,6 +422,11 @@ async def import_spreadsheet(
             content.decode("utf-8"),
             name=name or filename.replace(".csv", ""),
         )
+    elif filename.endswith((".xlsx", ".xls")):
+        spreadsheet = svc.import_xlsx(
+            content,
+            name=name or filename.rsplit(".", 1)[0],
+        )
     else:
         raise HTTPException(status_code=400, detail="Unsupported file format. Use CSV or XLSX.")
 
@@ -478,19 +483,31 @@ async def export_spreadsheet(
     sheet_index: int = Query(0, ge=0),
     svc: SpreadsheetService = Depends(get_spreadsheet_service),
 ):
-    """Export a spreadsheet to CSV or Excel format."""
+    """Export a spreadsheet to CSV, TSV, or Excel format."""
+    spreadsheet = svc.get(spreadsheet_id)
+    if not spreadsheet:
+        raise HTTPException(status_code=404, detail="Spreadsheet not found")
+
+    filename = f"{spreadsheet.name}.{format}"
+
+    if format == "xlsx":
+        xlsx_bytes = svc.export_xlsx(spreadsheet_id, sheet_index)
+        if xlsx_bytes is None:
+            raise HTTPException(status_code=404, detail="Spreadsheet not found")
+        return StreamingResponse(
+            io.BytesIO(xlsx_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     delimiter = "\t" if format == "tsv" else ","
     content = svc.export_csv(spreadsheet_id, sheet_index, delimiter)
     if content is None:
         raise HTTPException(status_code=404, detail="Spreadsheet not found")
 
-    spreadsheet = svc.get(spreadsheet_id)
-    filename = f"{spreadsheet.name}.{format}"
-    mime_type = "text/csv" if format in ["csv", "tsv"] else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-
     return StreamingResponse(
         io.StringIO(content),
-        media_type=mime_type,
+        media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

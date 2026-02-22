@@ -63,6 +63,20 @@ class ProofreadingRequest(BaseModel):
 # AGENT ENDPOINTS
 # =============================================================================
 
+@router.get("")
+async def list_agents():
+    """List available agent types with their capabilities."""
+    agent_types = []
+    for at in AgentType:
+        agent_types.append({
+            "id": at.value,
+            "name": at.value.replace("_", " ").title(),
+            "type": at.value,
+            "status": "available",
+        })
+    return {"agents": agent_types, "total": len(agent_types)}
+
+
 @router.post("/research")
 async def run_research_agent(request: ResearchRequest):
     """

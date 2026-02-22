@@ -399,6 +399,57 @@ class SpreadsheetService:
 
         return self.create(name=name, owner_id=owner_id, initial_data=data)
 
+    def import_xlsx(
+        self,
+        xlsx_content: bytes,
+        name: str = "Imported Spreadsheet",
+        owner_id: Optional[str] = None,
+    ) -> Spreadsheet:
+        """Import an XLSX file as a new spreadsheet."""
+        import openpyxl
+        from io import BytesIO
+
+        wb = openpyxl.load_workbook(BytesIO(xlsx_content), data_only=True)
+        sheets: list[Sheet] = []
+        for idx, ws in enumerate(wb.worksheets):
+            data: list[list[Any]] = []
+            for row in ws.iter_rows(values_only=True):
+                data.append([("" if v is None else v) for v in row])
+            if not data:
+                data = [["" for _ in range(26)] for _ in range(100)]
+            # Pad rows to equal length
+            max_cols = max(len(r) for r in data) if data else 26
+            for r in data:
+                while len(r) < max_cols:
+                    r.append("")
+            sheets.append(Sheet(
+                id=str(uuid.uuid4()),
+                name=ws.title or f"Sheet{idx + 1}",
+                index=idx,
+                data=data,
+            ))
+
+        if not sheets:
+            sheets = [Sheet(
+                id=str(uuid.uuid4()),
+                name="Sheet1",
+                index=0,
+                data=[["" for _ in range(26)] for _ in range(100)],
+            )]
+
+        now = datetime.now(timezone.utc).isoformat()
+        spreadsheet = Spreadsheet(
+            id=str(uuid.uuid4()),
+            name=name,
+            sheets=sheets,
+            created_at=now,
+            updated_at=now,
+            owner_id=owner_id,
+        )
+        self._save_spreadsheet(spreadsheet)
+        logger.info(f"Imported XLSX spreadsheet: {spreadsheet.id} ({len(sheets)} sheets)")
+        return spreadsheet
+
     def export_csv(
         self,
         spreadsheet_id: str,
@@ -424,6 +475,34 @@ class SpreadsheetService:
             writer.writerow(row)
 
         return output.getvalue()
+
+    def export_xlsx(
+        self,
+        spreadsheet_id: str,
+        sheet_index: int = 0,
+    ) -> Optional[bytes]:
+        """Export a sheet as XLSX binary."""
+        import openpyxl
+        from io import BytesIO
+
+        spreadsheet = self.get(spreadsheet_id)
+        if not spreadsheet:
+            return None
+
+        if sheet_index < 0 or sheet_index >= len(spreadsheet.sheets):
+            return None
+
+        sheet = spreadsheet.sheets[sheet_index]
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet.name
+
+        for row in sheet.data:
+            ws.append(row)
+
+        buf = BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
 
     def list_spreadsheets(
         self,

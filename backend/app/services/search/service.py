@@ -194,6 +194,9 @@ class SearchService:
         """
         start_time = datetime.now(timezone.utc)
 
+        # Lazy-index: populate from state store on first search
+        await self._ensure_indexed()
+
         # Get matching documents based on search type
         if search_type == SearchType.SEMANTIC:
             matches = await self._semantic_search(query)
@@ -435,6 +438,126 @@ class SearchService:
             del self._saved_searches[search_id]
             return True
         return False
+
+    async def reindex_all(self) -> Dict[str, Any]:
+        """Reindex all searchable entities (templates, connections, reports, jobs) from state store."""
+        import backend.app.services.state_access as state_access
+
+        indexed = 0
+        errors = 0
+
+        # Clear existing index
+        with self._lock:
+            self._index.clear()
+            self._inverted_index.clear()
+
+        # Index templates
+        try:
+            templates = state_access.list_templates() or []
+            for t in templates:
+                tid = t.get("id") or t.get("template_id") or ""
+                if not tid:
+                    continue
+                name = t.get("name") or t.get("template_name") or tid
+                kind = t.get("kind") or t.get("template_kind") or "unknown"
+                status_val = t.get("status") or ""
+                tags = ", ".join(t.get("tags") or []) if t.get("tags") else ""
+                content_parts = [name, kind, status_val, tags, tid]
+                content = " ".join(str(p) for p in content_parts if p)
+                try:
+                    await self.index_document(
+                        document_id=f"template:{tid}",
+                        title=name,
+                        content=content,
+                        metadata={"type": "template", "kind": kind, "status": status_val, "id": tid},
+                    )
+                    indexed += 1
+                except Exception:
+                    errors += 1
+        except Exception as exc:
+            logger.warning(f"Failed to index templates: {exc}")
+
+        # Index connections
+        try:
+            connections = state_access.list_connections() or []
+            for c in connections:
+                cid = c.get("id") or c.get("connection_id") or ""
+                if not cid:
+                    continue
+                name = c.get("name") or c.get("connection_name") or cid
+                db_type = c.get("type") or c.get("db_type") or ""
+                content_parts = [name, db_type, cid]
+                content = " ".join(str(p) for p in content_parts if p)
+                try:
+                    await self.index_document(
+                        document_id=f"connection:{cid}",
+                        title=name,
+                        content=content,
+                        metadata={"type": "connection", "db_type": db_type, "id": cid},
+                    )
+                    indexed += 1
+                except Exception:
+                    errors += 1
+        except Exception as exc:
+            logger.warning(f"Failed to index connections: {exc}")
+
+        # Index report runs
+        try:
+            runs = state_access.list_report_runs() or []
+            for r in runs:
+                rid = r.get("id") or r.get("run_id") or ""
+                if not rid:
+                    continue
+                tname = r.get("template_name") or r.get("templateName") or ""
+                status_val = r.get("status") or ""
+                content_parts = [tname, status_val, rid]
+                content = " ".join(str(p) for p in content_parts if p)
+                try:
+                    await self.index_document(
+                        document_id=f"report:{rid}",
+                        title=tname or f"Report {rid[:8]}",
+                        content=content,
+                        metadata={"type": "report", "status": status_val, "id": rid},
+                    )
+                    indexed += 1
+                except Exception:
+                    errors += 1
+        except Exception as exc:
+            logger.warning(f"Failed to index report runs: {exc}")
+
+        # Index jobs
+        try:
+            jobs = state_access.list_jobs() or []
+            for j in jobs:
+                jid = j.get("id") or j.get("jobId") or ""
+                if not jid:
+                    continue
+                tname = j.get("templateName") or j.get("template_name") or ""
+                status_val = j.get("status") or ""
+                jtype = j.get("jobType") or j.get("job_type") or ""
+                content_parts = [tname, status_val, jtype, jid]
+                content = " ".join(str(p) for p in content_parts if p)
+                try:
+                    await self.index_document(
+                        document_id=f"job:{jid}",
+                        title=tname or f"Job {jid[:8]}",
+                        content=content,
+                        metadata={"type": "job", "status": status_val, "id": jid},
+                    )
+                    indexed += 1
+                except Exception:
+                    errors += 1
+        except Exception as exc:
+            logger.warning(f"Failed to index jobs: {exc}")
+
+        self._indexed = True
+        logger.info(f"Reindex complete: {indexed} indexed, {errors} errors")
+        return {"indexed": indexed, "errors": errors, "total": indexed + errors}
+
+    async def _ensure_indexed(self) -> None:
+        """Lazy-index on first search if not yet populated."""
+        if not getattr(self, "_indexed", False) and not self._index:
+            await self.reindex_all()
 
     async def get_search_analytics(self) -> SearchAnalytics:
         """Get search analytics."""

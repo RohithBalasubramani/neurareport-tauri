@@ -69,11 +69,25 @@ async def get_dashboard_analytics() -> Dict[str, Any]:
     running_jobs = [j for j in jobs if _normalize_job_status(j.get("status")) == STATUS_RUNNING]
     pending_jobs = [j for j in jobs if _normalize_job_status(j.get("status")) == STATUS_QUEUED]
 
+    # Helper: state_access.list_jobs() returns camelCase keys from _sanitize_job.
+    # Support both camelCase and snake_case for robustness.
+    def _job_created(j: dict) -> str | None:
+        return j.get("createdAt") or j.get("created_at")
+
+    def _job_template_id(j: dict) -> str | None:
+        return j.get("templateId") or j.get("template_id")
+
+    def _job_template_name(j: dict) -> str | None:
+        return j.get("templateName") or j.get("template_name")
+
+    def _job_finished(j: dict) -> str | None:
+        return j.get("finishedAt") or j.get("finished_at") or j.get("completedAt") or j.get("completed_at")
+
     # Jobs by time period
     def count_jobs_after(job_list: list, after: datetime) -> int:
         count = 0
         for j in job_list:
-            created = _parse_iso(j.get("created_at"))
+            created = _parse_iso(_job_created(j))
             if created and created >= after:
                 count += 1
         return count
@@ -92,9 +106,9 @@ async def get_dashboard_analytics() -> Dict[str, Any]:
     approved_templates = [t for t in templates if t.get("status") == "approved"]
 
     # Most used templates (by job count)
-    template_usage = {}
+    template_usage: dict[str, int] = {}
     for job in jobs:
-        tid = job.get("template_id")
+        tid = _job_template_id(job)
         if tid:
             template_usage[tid] = template_usage.get(tid, 0) + 1
 
@@ -128,7 +142,7 @@ async def get_dashboard_analytics() -> Dict[str, Any]:
 
         day_jobs = [
             j for j in jobs
-            if (created := _parse_iso(j.get("created_at"))) and day <= created < day_end
+            if (created := _parse_iso(_job_created(j))) and day <= created < day_end
         ]
         day_completed = len([j for j in day_jobs if _normalize_job_status(j.get("status")) == STATUS_SUCCEEDED])
         day_failed = len([j for j in day_jobs if _normalize_job_status(j.get("status")) == STATUS_FAILED])
@@ -142,15 +156,15 @@ async def get_dashboard_analytics() -> Dict[str, Any]:
         })
 
     # Recent activity (last 10 jobs)
-    recent_jobs = sorted(jobs, key=lambda j: j.get("created_at") or "", reverse=True)[:10]
+    recent_jobs = sorted(jobs, key=lambda j: _job_created(j) or "", reverse=True)[:10]
     recent_activity = []
     for job in recent_jobs:
         recent_activity.append({
             "id": job.get("id"),
             "type": "job",
             "action": f"Report {_normalize_job_status(job.get('status'))}",
-            "template": job.get("template_name") or job.get("template_id", "")[:12],
-            "timestamp": job.get("completed_at") or job.get("created_at"),
+            "template": _job_template_name(job) or (_job_template_id(job) or "")[:12],
+            "timestamp": _job_finished(job) or _job_created(job),
             "status": _normalize_job_status(job.get("status")),
         })
 

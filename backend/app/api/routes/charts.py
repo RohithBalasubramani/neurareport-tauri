@@ -56,6 +56,23 @@ def get_service() -> AutoChartService:
     return AutoChartService()
 
 
+@router.get("/saved")
+async def list_saved_charts():
+    """List all saved charts across all templates."""
+    all_charts = []
+    try:
+        templates = state_access.list_templates()
+        for t in templates:
+            tid = t.get("id", "")
+            saved = state_access.list_saved_charts(tid) if hasattr(state_access, "list_saved_charts") else []
+            for c in saved:
+                c["template_id"] = tid
+                all_charts.append(c)
+    except Exception:
+        pass
+    return {"charts": all_charts, "total": len(all_charts)}
+
+
 @router.post("/analyze")
 async def analyze_for_charts(
     payload: ChartAnalyzeRequest,

@@ -11,7 +11,9 @@ import { neutral } from '@/app/theme'
 // GLASS CARD
 // ---------------------------------------------------------------------------
 
-export const GlassCard = styled(Card)(({ theme }) => ({
+export const GlassCard = styled(Card, {
+  shouldForwardProp: (prop) => prop !== 'gradient' && prop !== 'hover',
+})(({ theme }) => ({
   backgroundColor: alpha(theme.palette.background.paper, 0.8),
   backdropFilter: 'blur(20px)',
   border: `1px solid ${alpha(theme.palette.divider, 0.3)}`,

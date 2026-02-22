@@ -29,6 +29,7 @@ from .routes import (
     enrichment,
     excel,
     export,
+    favorites,
     federation,
     health,
     ingestion,
@@ -37,10 +38,12 @@ from .routes import (
     legacy,
     logger,
     nl2sql,
+    notifications,
     recommendations,
     reports,
     schedules,
     search,
+    settings,
     spreadsheets,
     state,
     summary,
@@ -137,6 +140,11 @@ def _build_v1_router() -> APIRouter:
 
     # Audit trail
     v1.include_router(audit.router, prefix="/audit", tags=["audit"])
+
+    # User preferences, favorites, notifications
+    v1.include_router(settings.router, prefix="/settings", tags=["settings"])
+    v1.include_router(favorites.router, prefix="/favorites", tags=["favorites"])
+    v1.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 
     return v1
 

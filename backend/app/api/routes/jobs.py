@@ -67,13 +67,19 @@ def list_jobs_route(
     # Normalize "completed" → "succeeded" for user convenience
     if status:
         status = [("succeeded" if s.lower() == "completed" else s) for s in status]
-    # Fetch more than needed to support offset
-    fetch_limit = limit + offset
-    jobs = list_jobs(status, job_type, fetch_limit, active_only)
-    # Apply offset
-    jobs = (jobs or [])[offset:]
-    normalized_jobs = [_normalize_job(job) for job in jobs]
-    return {"jobs": normalized_jobs, "correlation_id": _correlation(request)}
+    # Fetch all matching jobs to get accurate total count
+    all_jobs = list_jobs(status, job_type, 10000, active_only) or []
+    total = len(all_jobs)
+    # Apply pagination
+    page_jobs = all_jobs[offset:offset + limit]
+    normalized_jobs = [_normalize_job(job) for job in page_jobs]
+    return {
+        "jobs": normalized_jobs,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "correlation_id": _correlation(request),
+    }
 
 
 @router.get("/active")

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.app.services.security import require_api_key
 import backend.app.services.state_access as state_access
@@ -40,7 +40,7 @@ def _normalize_entity_type(raw: str) -> str:
 
 class FavoriteRequest(BaseModel):
     entity_type: str
-    entity_id: str
+    entity_id: str = Field(..., max_length=500)
 
 
 @router.get("")

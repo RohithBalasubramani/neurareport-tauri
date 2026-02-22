@@ -1170,6 +1170,24 @@ class StateStore:
             rec = (state.get("runs") or {}).get(run_id)
             return self._sanitize_report_run(rec)
 
+    def update_report_run_artifacts(self, run_id: str, artifacts_patch: dict) -> Optional[dict]:
+        """Merge new artifact keys into an existing run record."""
+        if not run_id or not artifacts_patch:
+            return None
+        with self._lock:
+            state = self._read_state()
+            runs = state.get("runs") or {}
+            rec = runs.get(run_id)
+            if not rec:
+                return None
+            existing = dict(rec.get("artifacts") or {})
+            existing.update(artifacts_patch)
+            rec["artifacts"] = existing
+            runs[run_id] = rec
+            state["runs"] = runs
+            self._write_state(state)
+            return self._sanitize_report_run(rec)
+
     # ------------------------------------------------------------------
     # last-used helpers
     # ------------------------------------------------------------------

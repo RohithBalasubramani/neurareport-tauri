@@ -7,7 +7,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+import re
+
+from pydantic import BaseModel, Field, field_validator
+
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def _validate_hex(v: str) -> str:
+    if not _HEX_COLOR_RE.match(v):
+        raise ValueError(f"Invalid hex color: {v}. Must be in format #RRGGBB")
+    return v
 
 
 class BrandColor(BaseModel):
@@ -42,6 +52,11 @@ class BrandKitCreate(BaseModel):
     colors: list[BrandColor] = Field(default_factory=list)
     typography: Typography = Field(default_factory=Typography)
 
+    @field_validator("primary_color", "secondary_color", "accent_color", "text_color", "background_color")
+    @classmethod
+    def validate_hex_color(cls, v: str) -> str:
+        return _validate_hex(v)
+
 
 class BrandKitUpdate(BaseModel):
     """Request to update a brand kit."""
@@ -57,6 +72,13 @@ class BrandKitUpdate(BaseModel):
     background_color: Optional[str] = None
     colors: Optional[list[BrandColor]] = None
     typography: Optional[Typography] = None
+
+    @field_validator("primary_color", "secondary_color", "accent_color", "text_color", "background_color")
+    @classmethod
+    def validate_hex_color(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            return _validate_hex(v)
+        return v
 
 
 class BrandKitResponse(BaseModel):

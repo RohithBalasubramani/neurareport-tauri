@@ -2526,6 +2526,16 @@ export async function getReportRun(runId) {
   return data?.run || data
 }
 
+/**
+ * Trigger on-demand DOCX generation for an existing report run.
+ * The backend converts the run's PDF to DOCX (may take minutes for large reports).
+ */
+export async function generateDocx(runId) {
+  if (!runId) throw new Error('Missing run id')
+  const { data } = await api.post(`/reports/runs/${encodeURIComponent(runId)}/generate-docx`)
+  return data?.run || data
+}
+
 // D) Discovery helper - delegates to discoverReports with simplified interface
 
 export async function discoverBatches({

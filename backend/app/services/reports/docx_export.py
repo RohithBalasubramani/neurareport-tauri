@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
+import time
 from io import BytesIO
 from pathlib import Path
 from typing import Iterable, Optional
@@ -601,15 +602,45 @@ def pdf_file_to_docx(
         )
         return None
 
+    method = "single-threaded"
+    t0 = time.monotonic()
     try:
-        converter.convert(str(output_path), start=start_page, end=end_page)
+        # Try multi-processing first (distributes pages across CPU cores,
+        # ~4-8x faster for large PDFs).  Falls back to single-threaded if
+        # multiprocessing fails (e.g. inside a PyInstaller frozen exe).
+        try:
+            converter.convert(
+                str(output_path),
+                start=start_page,
+                end=end_page,
+                multi_processing=True,
+                cpu_count=0,  # 0 = use all available CPUs
+            )
+            method = "multi-processing"
+        except Exception as mp_exc:
+            logger.warning(
+                "docx_pdf_multiprocessing_failed",
+                extra={
+                    "event": "docx_pdf_multiprocessing_failed",
+                    "error": str(mp_exc),
+                    "pdf_path": str(pdf_path),
+                },
+            )
+            with contextlib.suppress(Exception):
+                converter.close()
+            converter = Converter(str(pdf_path))
+            converter.convert(str(output_path), start=start_page, end=end_page)
+            method = "single-threaded-fallback"
     except Exception as exc:  # pragma: no cover
+        elapsed = time.monotonic() - t0
         logger.warning(
             "docx_pdf_convert_failed",
             extra={
                 "event": "docx_pdf_convert_failed",
                 "pdf_path": str(pdf_path),
                 "docx_path": str(output_path),
+                "method": method,
+                "elapsed_sec": round(elapsed, 1),
                 "error": str(exc),
             },
         )
@@ -618,12 +649,15 @@ def pdf_file_to_docx(
         with contextlib.suppress(Exception):
             converter.close()
 
+    elapsed = time.monotonic() - t0
     logger.info(
         "docx_pdf_convert_success",
         extra={
             "event": "docx_pdf_convert_success",
             "pdf_path": str(pdf_path),
             "docx_path": str(output_path),
+            "method": method,
+            "elapsed_sec": round(elapsed, 1),
             "start_page": start_page,
             "end_page": end_page,
         },

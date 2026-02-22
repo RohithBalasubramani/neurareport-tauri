@@ -518,13 +518,17 @@ class KnowledgeService:
 
             title = str(doc.get("title") or "").lower()
             description = str(doc.get("description") or "").lower()
+            content = str(doc.get("content") or "").lower()
 
             if query_lower in title:
                 score += 2.0
                 highlights.append(f"Title: {doc['title']}")
             if query_lower in description:
                 score += 1.0
-                highlights.append(f"Description match")
+                highlights.append("Description match")
+            if query_lower in content:
+                score += 1.5
+                highlights.append("Content match")
 
             # Filter by document type
             if document_types:

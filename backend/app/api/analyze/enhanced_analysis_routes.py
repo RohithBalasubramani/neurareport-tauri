@@ -345,6 +345,37 @@ async def analyze_document(
     )
 
 
+# =============================================================================
+# STATIC GET ROUTES — must precede /{analysis_id} catch-all
+# =============================================================================
+
+@router.get("/integrations")
+async def list_integrations():
+    """List registered external integrations."""
+    orchestrator = get_orchestrator()
+    return {"integrations": orchestrator.integration_service.list_integrations()}
+
+
+@router.get("/sources")
+async def list_data_sources():
+    """List registered data sources."""
+    orchestrator = get_orchestrator()
+    sources = orchestrator.integration_service.list_data_sources()
+    return {
+        "sources": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "type": s.type.value,
+                "created_at": s.created_at.isoformat(),
+                "last_used": s.last_used.isoformat() if s.last_used else None,
+                "is_active": s.is_active,
+            }
+            for s in sources
+        ]
+    }
+
+
 @router.get("/{analysis_id}")
 async def get_analysis(analysis_id: str):
     """Get a previously computed analysis result."""
@@ -755,14 +786,8 @@ async def get_shared_analysis(share_id: str):
 
 # =============================================================================
 # INTEGRATION ENDPOINTS
+# (GET /integrations moved before /{analysis_id} catch-all above)
 # =============================================================================
-
-@router.get("/integrations")
-async def list_integrations():
-    """List registered external integrations."""
-    orchestrator = get_orchestrator()
-    return {"integrations": orchestrator.integration_service.list_integrations()}
-
 
 @router.post("/integrations")
 async def register_integration(request: IntegrationRequest):
@@ -814,25 +839,7 @@ async def create_integration_item(
     return {"status": "created", "integration_id": integration_id, "item_id": item_id}
 
 
-@router.get("/sources")
-async def list_data_sources():
-    """List registered data sources."""
-    orchestrator = get_orchestrator()
-    sources = orchestrator.integration_service.list_data_sources()
-    return {
-        "sources": [
-            {
-                "id": s.id,
-                "name": s.name,
-                "type": s.type.value,
-                "created_at": s.created_at.isoformat(),
-                "last_used": s.last_used.isoformat() if s.last_used else None,
-                "is_active": s.is_active,
-            }
-            for s in sources
-        ]
-    }
-
+# (GET /sources moved before /{analysis_id} catch-all above)
 
 @router.post("/sources")
 async def register_data_source(request: DataSourceRequest):

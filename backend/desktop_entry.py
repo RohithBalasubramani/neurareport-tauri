@@ -227,6 +227,12 @@ def _ensure_playwright_chromium(data_dir: Path):
 
 
 def main():
+    # Required for multiprocessing in PyInstaller frozen executables on Windows.
+    # pdf2docx uses multiprocessing for parallel page conversion; without this
+    # call the spawn start-method causes an infinite process loop.
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     parser = argparse.ArgumentParser(description="NeuraReport desktop backend")
     parser.add_argument("--port", type=int, default=8000, help="Port to listen on")
     args = parser.parse_args()
@@ -305,4 +311,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()

@@ -133,6 +133,7 @@ class UpdateDashboardRequest(BaseModel):
     filters: Optional[list[dict[str, Any]]] = None
     theme: Optional[str] = None
     refresh_interval: Optional[int] = Field(None, ge=5, le=86400)
+    metadata: Optional[dict[str, Any]] = None
 
 
 class AddWidgetRequest(BaseModel):
@@ -143,6 +144,16 @@ class AddWidgetRequest(BaseModel):
     y: int = 0
     w: int = 4
     h: int = 3
+
+
+class UpdateWidgetRequest(BaseModel):
+    """Update widget request — all fields optional."""
+
+    config: Optional[WidgetConfig] = None
+    x: Optional[int] = None
+    y: Optional[int] = None
+    w: Optional[int] = None
+    h: Optional[int] = None
 
 
 class WidgetLayoutItem(BaseModel):
@@ -200,6 +211,7 @@ class DashboardResponse(BaseModel):
     filters: list[dict[str, Any]]
     theme: Optional[str]
     refresh_interval: Optional[int]
+    metadata: Optional[dict[str, Any]] = None
     created_at: str
     updated_at: str
 
@@ -233,6 +245,12 @@ async def list_dashboards(
 # ============================================
 # Static-path routes (must precede /{dashboard_id})
 # ============================================
+
+@router.get("/stats")
+async def get_dashboard_stats():
+    """Get dashboard statistics."""
+    return _dashboard_svc.get_stats()
+
 
 @router.get("/snapshots/{snapshot_id}")
 async def get_snapshot(snapshot_id: str):
@@ -299,6 +317,13 @@ async def get_dashboard(dashboard_id: str):
 async def update_dashboard(dashboard_id: str, request: UpdateDashboardRequest):
     """Update a dashboard."""
     widgets = [w.model_dump() for w in request.widgets] if request.widgets is not None else None
+    # Merge user-supplied metadata with existing (preserve sharing etc.)
+    merged_metadata = request.metadata
+    if merged_metadata is not None:
+        existing = _dashboard_svc.get_dashboard(dashboard_id)
+        if existing and existing.get("metadata"):
+            merged_metadata = {**existing["metadata"], **merged_metadata}
+
     dashboard = _dashboard_svc.update_dashboard(
         dashboard_id,
         name=request.name,
@@ -307,6 +332,7 @@ async def update_dashboard(dashboard_id: str, request: UpdateDashboardRequest):
         filters=request.filters,
         theme=request.theme,
         refresh_interval=request.refresh_interval,
+        metadata=merged_metadata,
     )
     if dashboard is None:
         raise HTTPException(status_code=404, detail="Dashboard not found")
@@ -346,13 +372,13 @@ async def add_widget(dashboard_id: str, request: AddWidgetRequest):
 async def update_widget(
     dashboard_id: str,
     widget_id: str,
-    request: AddWidgetRequest,
+    request: UpdateWidgetRequest,
 ):
     """Update a widget."""
     widget = _widget_svc.update_widget(
         dashboard_id,
         widget_id,
-        config=request.config.model_dump(),
+        config=request.config.model_dump() if request.config else None,
         x=request.x,
         y=request.y,
         w=request.w,

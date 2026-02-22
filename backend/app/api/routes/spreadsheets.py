@@ -131,6 +131,10 @@ async def get_spreadsheet(
     return {
         "id": spreadsheet.id,
         "name": spreadsheet.name,
+        "sheets": [
+            {"id": s.id, "name": s.name, "index": s.index}
+            for s in spreadsheet.sheets
+        ],
         "sheet_id": sheet.id,
         "sheet_name": sheet.name,
         "data": sheet.data,

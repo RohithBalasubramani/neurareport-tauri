@@ -380,6 +380,7 @@ export default function ReportsPage() {
   const [selectedBatches, setSelectedBatches] = useState([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [runHistory, setRunHistory] = useState([])
+  const [generatingDocx, setGeneratingDocx] = useState(null) // run ID currently generating
   const [selectedRun, setSelectedRun] = useState(null)
   const [runSummary, setRunSummary] = useState(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
@@ -628,6 +629,20 @@ export default function ReportsPage() {
   useEffect(() => {
     fetchRunHistory()
   }, [fetchRunHistory])
+
+  const handleGenerateDocx = useCallback(async (runId) => {
+    setGeneratingDocx(runId)
+    try {
+      await api.generateDocx(runId)
+      toast.show('DOCX generated successfully', 'success')
+      fetchRunHistory() // refresh to show the new download button
+    } catch (err) {
+      console.error('DOCX generation failed:', err)
+      toast.show('DOCX generation failed — check backend logs', 'error')
+    } finally {
+      setGeneratingDocx(null)
+    }
+  }, [toast, fetchRunHistory])
 
   const toggleBatch = useCallback((batchId) => {
     setSelectedBatches((prev) => {
@@ -1144,7 +1159,7 @@ export default function ReportsPage() {
                             XLSX
                           </DownloadButton>
                         )}
-                        {run.artifacts?.docx_url && (
+                        {run.artifacts?.docx_url ? (
                           <DownloadButton
                             size="small"
                             variant="outlined"
@@ -1153,7 +1168,20 @@ export default function ReportsPage() {
                           >
                             DOCX
                           </DownloadButton>
-                        )}
+                        ) : run.artifacts?.pdf_url ? (
+                          <DownloadButton
+                            size="small"
+                            variant="outlined"
+                            disabled={generatingDocx === run.id}
+                            startIcon={generatingDocx === run.id
+                              ? <Box component="span" sx={{ width: 14, height: 14, border: '2px solid', borderColor: 'text.disabled', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite', '@keyframes spin': { to: { transform: 'rotate(360deg)' } } }} />
+                              : <ArticleIcon sx={{ fontSize: 14 }} />}
+                            onClick={(e) => { e.stopPropagation(); handleGenerateDocx(run.id) }}
+                            title="DOCX conversion may take several minutes for large reports"
+                          >
+                            {generatingDocx === run.id ? 'Generating...' : 'Generate DOCX'}
+                          </DownloadButton>
+                        ) : null}
                         <DownloadButton
                           size="small"
                           variant="outlined"

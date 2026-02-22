@@ -201,7 +201,7 @@ async def add_document(
     return await knowledge_service.add_document(create_payload)
 
 
-@router.get("/documents", response_model=list[LibraryDocumentResponse])
+@router.get("/documents")
 async def list_documents(
     collection_id: Optional[str] = None,
     tags: Optional[str] = Query(None, description="Comma-separated tag names"),
@@ -222,7 +222,8 @@ async def list_documents(
     if query:
         q_lower = query.lower()
         docs = [d for d in docs if q_lower in (d.title or "").lower()]
-    return docs
+        total = len(docs)
+    return {"documents": docs, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/documents/{doc_id}", response_model=LibraryDocumentResponse)
@@ -341,7 +342,7 @@ async def search_documents(request: SearchRequest):
     )
 
 
-@router.get("/search")
+@router.get("/search", response_model=SearchResponse)
 async def search_documents_get(
     query: str,
     limit: int = Query(50, ge=1, le=200),

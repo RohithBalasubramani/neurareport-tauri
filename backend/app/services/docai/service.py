@@ -4,7 +4,11 @@ Main service for document intelligence - parsing, classification, and analysis.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
+import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -46,6 +50,8 @@ from backend.app.services.docai.parsers.invoice_parser import invoice_parser
 from backend.app.services.docai.parsers.receipt_scanner import receipt_scanner
 from backend.app.services.docai.parsers.resume_parser import resume_parser
 
+logger = logging.getLogger(__name__)
+
 
 class DocAIService:
     """Main Document AI service orchestrating all document intelligence features."""
@@ -54,6 +60,48 @@ class DocAIService:
         """Initialize the DocAI service."""
         self._nlp_available = self._check_nlp()
         self._embeddings_available = self._check_embeddings()
+        self._llm_client = None
+
+    # ---- LLM integration (mirrors SpreadsheetAIService pattern) ----
+
+    def _get_llm_client(self):
+        if self._llm_client is None:
+            from backend.app.services.llm.client import get_llm_client
+            self._llm_client = get_llm_client()
+        return self._llm_client
+
+    async def _call_llm(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 2000,
+        description: str = "docai",
+    ) -> str:
+        client = self._get_llm_client()
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        response = await asyncio.to_thread(
+            client.complete,
+            messages=messages,
+            description=description,
+            max_tokens=max_tokens,
+        )
+        content = (
+            response.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+        return content
+
+    @staticmethod
+    def _parse_llm_json(raw: str) -> Any:
+        text = raw.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*\n?", "", text, count=1)
+            text = re.sub(r"\n?```\s*$", "", text, count=1)
+        return json.loads(text)
 
     def _check_nlp(self) -> bool:
         """Check if NLP libraries are available."""
@@ -98,31 +146,56 @@ class DocAIService:
         start_time = time.time()
         text = await self._extract_text(request.file_path, request.content)
 
-        # Calculate scores for each category
-        scores = self._calculate_category_scores(text.lower())
-
-        # Find best match
-        best_category = max(scores, key=scores.get)
-        best_score = scores[best_category]
-
-        # Suggest parsers based on category
         parser_map = {
             DocumentCategory.INVOICE: ["invoice_parser"],
             DocumentCategory.CONTRACT: ["contract_analyzer"],
             DocumentCategory.RESUME: ["resume_parser"],
             DocumentCategory.RECEIPT: ["receipt_scanner"],
         }
-        suggested_parsers = parser_map.get(best_category, [])
 
+        # Try LLM classification first, fall back to keyword matching
+        try:
+            result = await self._classify_with_llm(text)
+            best_category = result["category"]
+            best_score = result["confidence"]
+            all_scores = {best_category.value: best_score}
+        except Exception:
+            logger.debug("LLM classification unavailable, falling back to keywords")
+            scores = self._calculate_category_scores(text.lower())
+            best_category = max(scores, key=scores.get)
+            best_score = scores[best_category]
+            all_scores = {k.value: v for k, v in scores.items()}
+
+        suggested_parsers = parser_map.get(best_category, [])
         processing_time_ms = int((time.time() - start_time) * 1000)
 
         return ClassifyResponse(
             category=best_category,
             confidence=best_score,
-            all_scores={k.value: v for k, v in scores.items()},
+            all_scores=all_scores,
             suggested_parsers=suggested_parsers,
             processing_time_ms=processing_time_ms,
         )
+
+    async def _classify_with_llm(self, text: str) -> Dict[str, Any]:
+        """Classify document using LLM."""
+        categories = ", ".join(c.value for c in DocumentCategory)
+        system_prompt = (
+            "You are a document classifier. Classify the document into exactly one "
+            f"of these categories: {categories}. "
+            "Return ONLY a JSON object with keys: category, confidence (0-1), reasoning."
+        )
+        user_prompt = f"Classify this document:\n\n{text[:4000]}"
+
+        raw = await self._call_llm(system_prompt, user_prompt, max_tokens=500, description="docai_classify")
+        parsed = self._parse_llm_json(raw)
+
+        cat_str = str(parsed.get("category", "other")).lower()
+        cat_map = {c.value: c for c in DocumentCategory}
+        category = cat_map.get(cat_str, DocumentCategory.OTHER)
+        confidence = min(max(float(parsed.get("confidence", 0.5)), 0.0), 1.0)
+
+        return {"category": category, "confidence": confidence}
 
     def _calculate_category_scores(self, text: str) -> Dict[DocumentCategory, float]:
         """Calculate classification scores for each category."""
@@ -190,12 +263,15 @@ class DocAIService:
         entities: List[ExtractedEntity] = []
         entity_counts: Dict[str, int] = {}
 
-        # Use spaCy if available
+        # Use spaCy if available, then LLM, then regex
         if self._nlp_available:
             entities = await self._extract_with_spacy(text, request.entity_types)
         else:
-            # Fallback to regex-based extraction
-            entities = self._extract_with_regex(text, request.entity_types)
+            try:
+                entities = await self._extract_with_llm(text, request.entity_types)
+            except Exception:
+                logger.debug("LLM entity extraction unavailable, falling back to regex")
+                entities = self._extract_with_regex(text, request.entity_types)
 
         # Count entities by type
         for entity in entities:
@@ -286,6 +362,48 @@ class DocAIService:
 
         return entities
 
+    async def _extract_with_llm(
+        self, text: str, entity_types: Optional[List[EntityType]]
+    ) -> List[ExtractedEntity]:
+        """Extract entities using the LLM client."""
+        type_hint = ""
+        if entity_types:
+            type_hint = f" Focus on these types: {', '.join(t.value for t in entity_types)}."
+
+        system_prompt = (
+            "You are a named-entity recognition engine. "
+            "Return ONLY a JSON array of objects with keys: "
+            "text, entity_type, start, end.  "
+            "entity_type must be one of: person, organization, location, date, "
+            "money, percentage, email, phone, url, product, event."
+        )
+        user_prompt = f"Extract all named entities from this text.{type_hint}\n\n{text[:4000]}"
+
+        raw = await self._call_llm(system_prompt, user_prompt, max_tokens=1500, description="docai_entities")
+        if not raw:
+            return self._extract_with_regex(text, entity_types)
+
+        parsed = self._parse_llm_json(raw)
+        if not isinstance(parsed, list):
+            parsed = parsed.get("entities", []) if isinstance(parsed, dict) else []
+
+        type_map = {t.value: t for t in EntityType}
+        entities: List[ExtractedEntity] = []
+        for item in parsed:
+            et = type_map.get(str(item.get("entity_type", "")).lower())
+            if not et:
+                continue
+            if entity_types and et not in entity_types:
+                continue
+            entities.append(ExtractedEntity(
+                text=str(item.get("text", "")),
+                entity_type=et,
+                start=int(item.get("start", 0)),
+                end=int(item.get("end", 0)),
+                confidence=0.8,
+            ))
+        return entities
+
     # Semantic Search
 
     async def semantic_search(
@@ -345,7 +463,6 @@ class DocAIService:
         """Compare two documents for differences."""
         start_time = time.time()
 
-        # Extract text from both documents
         text_a = await self._extract_text(
             request.document_a_path, request.document_a_content
         )
@@ -353,18 +470,23 @@ class DocAIService:
             request.document_b_path, request.document_b_content
         )
 
-        # Calculate similarity
-        similarity = self._calculate_similarity(text_a, text_b)
+        # Try LLM-powered comparison, fall back to Jaccard + difflib
+        try:
+            result = await self._compare_with_llm(text_a, text_b)
+            similarity = result["similarity_score"]
+            summary = result["summary"]
+        except Exception:
+            logger.debug("LLM comparison unavailable, falling back to Jaccard")
+            similarity = self._calculate_similarity(text_a, text_b)
+            summary = None
 
-        # Find differences
         differences = self._find_differences(text_a, text_b)
 
-        # Generate summary
-        summary = self._generate_comparison_summary(
-            similarity, len(differences), text_a, text_b
-        )
+        if summary is None:
+            summary = self._generate_comparison_summary(
+                similarity, len(differences), text_a, text_b
+            )
 
-        # Identify significant changes
         significant = [d.modified_text or d.original_text for d in differences
                        if d.significance == "high"][:5]
 
@@ -377,6 +499,25 @@ class DocAIService:
             significant_changes=significant,
             processing_time_ms=processing_time_ms,
         )
+
+    async def _compare_with_llm(self, text_a: str, text_b: str) -> Dict[str, Any]:
+        """Compare documents using LLM for semantic similarity."""
+        system_prompt = (
+            "You are a document comparison engine. Compare the two documents and "
+            "return ONLY a JSON object with keys: similarity_score (float 0-1), summary (string)."
+        )
+        user_prompt = (
+            f"Document A:\n{text_a[:2000]}\n\n"
+            f"Document B:\n{text_b[:2000]}"
+        )
+
+        raw = await self._call_llm(system_prompt, user_prompt, max_tokens=500, description="docai_compare")
+        parsed = self._parse_llm_json(raw)
+
+        score = min(max(float(parsed.get("similarity_score", 0.0)), 0.0), 1.0)
+        summary = str(parsed.get("summary", ""))
+
+        return {"similarity_score": score, "summary": summary}
 
     def _calculate_similarity(self, text_a: str, text_b: str) -> float:
         """Calculate text similarity using Jaccard index."""

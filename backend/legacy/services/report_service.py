@@ -468,7 +468,9 @@ def _run_report_internal(
     docx_requested = bool(p.docx)
     xlsx_requested = bool(p.xlsx)
     docx_landscape = kind == "excel"
-    docx_enabled = docx_requested or docx_landscape
+    # DOCX is generated on-demand via /generate-docx endpoint (pdf2docx is
+    # too slow to block the main pipeline — can take 30+ min for large PDFs).
+    docx_enabled = False
     xlsx_enabled = xlsx_requested or kind == "excel"
     render_strategy = RENDER_STRATEGIES.resolve("excel" if docx_landscape or xlsx_enabled else "pdf")
     _ensure_not_cancelled()
@@ -1420,6 +1422,76 @@ def list_report_runs(
 
 def get_report_run(run_id: str) -> dict | None:
     return _state_store().get_report_run(run_id)
+
+
+def generate_docx_for_run(run_id: str) -> dict:
+    """Generate DOCX on-demand from a completed run's PDF artifact.
+
+    Raises ValueError if the run or PDF doesn't exist,
+    RuntimeError if conversion fails.
+    """
+    store = _state_store()
+    run = store.get_report_run(run_id)
+    if not run:
+        raise ValueError(f"Run {run_id} not found")
+
+    artifacts = run.get("artifacts") or {}
+    if artifacts.get("docx_url"):
+        return run  # already generated
+
+    pdf_url = artifacts.get("pdf_url")
+    if not pdf_url:
+        raise ValueError("Run has no PDF artifact to convert")
+
+    # Reverse-map the URL to a filesystem path.
+    # PDF URLs look like: /uploads/<template_id>/…/filled_123.pdf
+    #                  or: /excel-uploads/<template_id>/…/filled_123.pdf
+    try:
+        api_mod = importlib.import_module("backend.api")
+        upload_root = getattr(api_mod, "UPLOAD_ROOT_BASE", UPLOAD_ROOT_BASE)
+        excel_root = getattr(api_mod, "EXCEL_UPLOAD_ROOT_BASE", EXCEL_UPLOAD_ROOT_BASE)
+    except Exception:
+        upload_root = UPLOAD_ROOT_BASE
+        excel_root = EXCEL_UPLOAD_ROOT_BASE
+
+    pdf_path: Path | None = None
+    for prefix, root in [("/uploads/", upload_root), ("/excel-uploads/", excel_root)]:
+        if pdf_url.startswith(prefix):
+            relative = pdf_url[len(prefix):]
+            candidate = root / relative
+            if candidate.exists():
+                pdf_path = candidate
+            break
+
+    if not pdf_path or not pdf_path.exists():
+        raise ValueError(f"PDF file not found on disk for URL: {pdf_url}")
+
+    docx_path = pdf_path.with_suffix(".docx")
+
+    from backend.app.services.reports.docx_export import pdf_file_to_docx
+
+    logger.info("generate_docx_start", extra={
+        "event": "generate_docx_start",
+        "run_id": run_id,
+        "pdf_path": str(pdf_path),
+    })
+
+    result = pdf_file_to_docx(pdf_path, docx_path)
+    if not result:
+        raise RuntimeError("DOCX conversion failed — check backend logs for details")
+
+    # Build the docx_url the same way _artifact_url does
+    docx_url = _artifact_url(docx_path)
+    if not docx_url:
+        raise RuntimeError("Could not build download URL for generated DOCX")
+
+    updated = store.update_report_run_artifacts(run_id, {"docx_url": docx_url})
+    logger.info("generate_docx_complete", extra={
+        "event": "generate_docx_complete",
+        "run_id": run_id,
+        "docx_url": docx_url,
+    })
+    return updated or run
 
 
 def scheduler_runner(payload: dict, kind: str, *, job_tracker: JobRunTracker | None = None) -> dict:

@@ -468,9 +468,7 @@ def _run_report_internal(
     docx_requested = bool(p.docx)
     xlsx_requested = bool(p.xlsx)
     docx_landscape = kind == "excel"
-    # DOCX is generated on-demand via /generate-docx endpoint (pdf2docx is
-    # too slow to block the main pipeline — can take 30+ min for large PDFs).
-    docx_enabled = False
+    docx_enabled = docx_requested or docx_landscape
     xlsx_enabled = xlsx_requested or kind == "excel"
     render_strategy = RENDER_STRATEGIES.resolve("excel" if docx_landscape or xlsx_enabled else "pdf")
     _ensure_not_cancelled()

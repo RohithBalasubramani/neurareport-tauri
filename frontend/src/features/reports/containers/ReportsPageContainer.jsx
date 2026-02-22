@@ -58,7 +58,9 @@ import { neutral, palette } from '@/app/theme'
 import { fadeInUp, GlassCard, StyledFormControl } from '@/styles'
 
 /** Download a file by URL — works in both browser and Tauri webview. */
-function downloadFile(url, filename) {
+function downloadFile(url, filename, toast) {
+  const label = filename || 'file'
+  if (toast) toast.show(`Downloading ${label}…`, 'info')
   if (isTauri()) {
     // Tauri: fetch as blob, create object URL, trigger download via hidden <a>
     fetch(url)
@@ -75,8 +77,12 @@ function downloadFile(url, filename) {
         a.click()
         document.body.removeChild(a)
         URL.revokeObjectURL(blobUrl)
+        if (toast) toast.show(`Downloaded ${label}`, 'success')
       })
-      .catch((err) => console.error('[download]', err))
+      .catch((err) => {
+        console.error('[download]', err)
+        if (toast) toast.show(`Download failed: ${err.message}`, 'error')
+      })
   } else {
     // Browser: open in new tab (original behavior)
     window.open(url, '_blank')
@@ -1134,7 +1140,7 @@ export default function ReportsPage() {
                             size="small"
                             variant="outlined"
                             startIcon={<DownloadIcon sx={{ fontSize: 14 }} />}
-                            onClick={(e) => { e.stopPropagation(); downloadFile(api.withBase(run.artifacts.pdf_url), `${run.templateName || 'report'}.pdf`) }}
+                            onClick={(e) => { e.stopPropagation(); downloadFile(api.withBase(run.artifacts.pdf_url), `${run.templateName || 'report'}.pdf`, toast) }}
                           >
                             PDF
                           </DownloadButton>
@@ -1144,7 +1150,7 @@ export default function ReportsPage() {
                             size="small"
                             variant="outlined"
                             startIcon={<DownloadIcon sx={{ fontSize: 14 }} />}
-                            onClick={(e) => { e.stopPropagation(); downloadFile(api.withBase(run.artifacts.html_url), `${run.templateName || 'report'}.html`) }}
+                            onClick={(e) => { e.stopPropagation(); downloadFile(api.withBase(run.artifacts.html_url), `${run.templateName || 'report'}.html`, toast) }}
                           >
                             HTML
                           </DownloadButton>
@@ -1154,7 +1160,7 @@ export default function ReportsPage() {
                             size="small"
                             variant="outlined"
                             startIcon={<TableChartIcon sx={{ fontSize: 14 }} />}
-                            onClick={(e) => { e.stopPropagation(); downloadFile(api.withBase(run.artifacts.xlsx_url), `${run.templateName || 'report'}.xlsx`) }}
+                            onClick={(e) => { e.stopPropagation(); downloadFile(api.withBase(run.artifacts.xlsx_url), `${run.templateName || 'report'}.xlsx`, toast) }}
                           >
                             XLSX
                           </DownloadButton>
@@ -1164,7 +1170,7 @@ export default function ReportsPage() {
                             size="small"
                             variant="outlined"
                             startIcon={<ArticleIcon sx={{ fontSize: 14 }} />}
-                            onClick={(e) => { e.stopPropagation(); downloadFile(api.withBase(run.artifacts.docx_url), `${run.templateName || 'report'}.docx`) }}
+                            onClick={(e) => { e.stopPropagation(); downloadFile(api.withBase(run.artifacts.docx_url), `${run.templateName || 'report'}.docx`, toast) }}
                           >
                             DOCX
                           </DownloadButton>

@@ -53,8 +53,35 @@ import { useInteraction, InteractionType, Reversibility, useNavigateInteraction 
 import ConnectionSelector from '@/components/common/ConnectionSelector'
 import * as api from '@/api/client'
 import * as summaryApi from '@/api/summary'
+import { isTauri } from '@/utils/tauri'
 import { neutral, palette } from '@/app/theme'
 import { fadeInUp, GlassCard, StyledFormControl } from '@/styles'
+
+/** Download a file by URL — works in both browser and Tauri webview. */
+function downloadFile(url, filename) {
+  if (isTauri()) {
+    // Tauri: fetch as blob, create object URL, trigger download via hidden <a>
+    fetch(url)
+      .then((res) => {
+        if (!res.ok) throw new Error(`Download failed: ${res.status}`)
+        return res.blob()
+      })
+      .then((blob) => {
+        const blobUrl = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = blobUrl
+        a.download = filename || 'download'
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(blobUrl)
+      })
+      .catch((err) => console.error('[download]', err))
+  } else {
+    // Browser: open in new tab (original behavior)
+    window.open(url, '_blank')
+  }
+}
 
 // =============================================================================
 // STYLED COMPONENTS
@@ -588,9 +615,7 @@ export default function ReportsPage() {
   const fetchRunHistory = useCallback(async () => {
     setHistoryLoading(true)
     try {
-      const opts = { limit: 10 }
-      if (selectedTemplate) opts.templateId = selectedTemplate
-      const runs = await api.listReportRuns(opts)
+      const runs = await api.listReportRuns({ limit: 10 })
       setRunHistory(runs)
     } catch (err) {
       console.error('Failed to load run history:', err)
@@ -598,7 +623,7 @@ export default function ReportsPage() {
     } finally {
       setHistoryLoading(false)
     }
-  }, [selectedTemplate, toast])
+  }, [toast])
 
   useEffect(() => {
     fetchRunHistory()
@@ -1041,9 +1066,7 @@ export default function ReportsPage() {
               <Box sx={{ py: 4, textAlign: 'center' }}>
                 <DescriptionIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
                 <Typography variant="body2" color="text.secondary">
-                  {selectedTemplate
-                    ? 'No recent runs for this design yet.'
-                    : 'No report runs yet. Generate a report to get started.'}
+                  No report runs yet. Generate a report to get started.
                 </Typography>
               </Box>
             )}
@@ -1096,9 +1119,7 @@ export default function ReportsPage() {
                             size="small"
                             variant="outlined"
                             startIcon={<DownloadIcon sx={{ fontSize: 14 }} />}
-                            href={api.withBase(run.artifacts.pdf_url)}
-                            target="_blank"
-                            onClick={(e) => e.stopPropagation()}
+                            onClick={(e) => { e.stopPropagation(); downloadFile(api.withBase(run.artifacts.pdf_url), `${run.templateName || 'report'}.pdf`) }}
                           >
                             PDF
                           </DownloadButton>
@@ -1108,9 +1129,7 @@ export default function ReportsPage() {
                             size="small"
                             variant="outlined"
                             startIcon={<DownloadIcon sx={{ fontSize: 14 }} />}
-                            href={api.withBase(run.artifacts.html_url)}
-                            target="_blank"
-                            onClick={(e) => e.stopPropagation()}
+                            onClick={(e) => { e.stopPropagation(); downloadFile(api.withBase(run.artifacts.html_url), `${run.templateName || 'report'}.html`) }}
                           >
                             HTML
                           </DownloadButton>
@@ -1120,9 +1139,7 @@ export default function ReportsPage() {
                             size="small"
                             variant="outlined"
                             startIcon={<TableChartIcon sx={{ fontSize: 14 }} />}
-                            href={api.withBase(run.artifacts.xlsx_url)}
-                            target="_blank"
-                            onClick={(e) => e.stopPropagation()}
+                            onClick={(e) => { e.stopPropagation(); downloadFile(api.withBase(run.artifacts.xlsx_url), `${run.templateName || 'report'}.xlsx`) }}
                           >
                             XLSX
                           </DownloadButton>
@@ -1132,9 +1149,7 @@ export default function ReportsPage() {
                             size="small"
                             variant="outlined"
                             startIcon={<ArticleIcon sx={{ fontSize: 14 }} />}
-                            href={api.withBase(run.artifacts.docx_url)}
-                            target="_blank"
-                            onClick={(e) => e.stopPropagation()}
+                            onClick={(e) => { e.stopPropagation(); downloadFile(api.withBase(run.artifacts.docx_url), `${run.templateName || 'report'}.docx`) }}
                           >
                             DOCX
                           </DownloadButton>

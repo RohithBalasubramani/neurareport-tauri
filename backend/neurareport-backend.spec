@@ -99,6 +99,16 @@ hidden_imports = _all_mods + [
     'playwright.async_api',
     'playwright._impl',
     'playwright._impl._driver',
+    'playwright._impl._transport',
+    'playwright._impl._connection',
+    'playwright._impl._browser_type',
+    'playwright._impl._browser',
+    'playwright._impl._page',
+    # Playwright dependencies (required at runtime, often missed)
+    'greenlet',
+    'pyee',
+    'pyee.base',
+    'pyee.cls',
 ]
 
 # --- Data files needed at runtime ---

@@ -49,89 +49,150 @@ def _clean_stale_locks(data_dir: Path):
         print(f"[DESKTOP] Cleaned {cleaned} stale lock file(s) from previous session", flush=True)
 
 
+def _find_chromium_in_dir(d: Path) -> bool:
+    """Check if a directory contains an installed Chromium browser."""
+    if not d.exists():
+        return False
+    for pattern in ["chromium-*", "chromium_*"]:
+        for entry in d.glob(pattern):
+            if entry.is_dir():
+                return True
+    return False
+
+
+def _find_system_chromium() -> Path | None:
+    """Check common system locations for an existing Playwright Chromium install."""
+    candidates = []
+    if platform.system() == "Windows":
+        for env_var in ["LOCALAPPDATA", "USERPROFILE"]:
+            base = os.environ.get(env_var)
+            if base:
+                candidates.append(Path(base) / "ms-playwright")
+                candidates.append(Path(base) / ".cache" / "ms-playwright")
+    elif platform.system() == "Darwin":
+        candidates.append(Path.home() / "Library" / "Caches" / "ms-playwright")
+    else:
+        candidates.append(Path.home() / ".cache" / "ms-playwright")
+
+    for candidate in candidates:
+        if _find_chromium_in_dir(candidate):
+            return candidate
+    return None
+
+
+def _ensure_node_executable(node_path: str) -> None:
+    """Ensure the bundled node binary has execute permission (Linux/macOS)."""
+    if platform.system() == "Windows":
+        return
+    p = Path(node_path)
+    if p.exists() and not os.access(str(p), os.X_OK):
+        try:
+            p.chmod(p.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+            print(f"[DESKTOP] Fixed execute permission on {p.name}", flush=True)
+        except OSError as e:
+            print(f"[DESKTOP] Could not chmod {p.name}: {e}", flush=True)
+
+
 def _ensure_playwright_chromium(data_dir: Path):
     """Install Playwright Chromium browser if not present.
 
-    Uses a fixed path inside app data to avoid all system path issues.
-    Tries multiple installation methods for cross-machine reliability.
+    Strategy:
+    1. Set PLAYWRIGHT_BROWSERS_PATH to a fixed app-data location (avoids
+       all system path and "wrong machine" issues).
+    2. Check if Chromium is already there.
+    3. Check if Chromium exists in a system location — if so, reuse it.
+    4. If not found anywhere, download via the bundled Playwright driver,
+       falling back to system Python or npx.
+    5. Verify the install by checking the directory exists.
+
     Falls back gracefully — PDF generation is skipped if unavailable.
     """
     browsers_dir = data_dir / "playwright-browsers"
     browsers_dir.mkdir(parents=True, exist_ok=True)
 
-    # Set THE canonical path BEFORE anything else — overrides all system defaults
-    # This avoids the "wrong path" issues on different machines
+    # Set THE canonical path BEFORE anything else — overrides all system defaults.
+    # This prevents Playwright's PyInstaller detection from setting it to "0".
+    # (Playwright's _transport.py uses env.setdefault which won't override this.)
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers_dir)
 
-    # Also set for Windows system-level fallback in render.py
-    if platform.system() == "Windows":
-        os.environ["LOCALAPPDATA"] = os.environ.get("LOCALAPPDATA", "")
-
-    # Quick check: chromium already downloaded?
-    if any(browsers_dir.glob("chromium-*")) or any(browsers_dir.glob("chromium_*")):
-        print("[DESKTOP] Playwright Chromium found", flush=True)
+    # ---- Check 1: already in our app-data dir? ----
+    if _find_chromium_in_dir(browsers_dir):
+        print("[DESKTOP] Playwright Chromium found in app data", flush=True)
         return
 
+    # ---- Check 2: already installed system-wide? ----
+    system_dir = _find_system_chromium()
+    if system_dir:
+        print(f"[DESKTOP] Found system Chromium at {system_dir}", flush=True)
+        # Point Playwright to the existing system install instead of downloading
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(system_dir)
+        return
+
+    # ---- Download Chromium ----
     print("[DESKTOP] Downloading Chromium for PDF generation (first launch, ~130MB)...", flush=True)
     installed = False
 
-    # Method 1: Use Playwright's bundled node.js driver (works in PyInstaller)
+    # Method 1: Use Playwright's bundled node.js driver (primary — works in PyInstaller)
+    # compute_driver_executable() returns (node_path, cli_js_path) tuple
     if not installed:
         try:
             from playwright._impl._driver import compute_driver_executable, get_driver_env
-            driver_exec = compute_driver_executable()
+            node_path, cli_path = compute_driver_executable()
+
+            # Ensure the bundled node binary is executable (Linux/macOS)
+            _ensure_node_executable(node_path)
+
             env = get_driver_env()
             env["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers_dir)
 
-            print("[DESKTOP] Method 1: Playwright driver install...", flush=True)
+            print(f"[DESKTOP] Method 1: driver install (node={node_path})", flush=True)
             result = subprocess.run(
-                [str(driver_exec), "install", "chromium"],
+                [node_path, cli_path, "install", "chromium"],
                 env=env,
                 capture_output=True,
                 text=True,
                 timeout=600,
             )
             if result.returncode == 0:
-                print("[DESKTOP] Chromium installed via driver", flush=True)
+                print("[DESKTOP] Chromium installed via bundled driver", flush=True)
                 installed = True
             else:
-                print(f"[DESKTOP] Driver method returned code {result.returncode}: {result.stderr[:300]}", flush=True)
+                stderr = result.stderr[:500] if result.stderr else "(no stderr)"
+                print(f"[DESKTOP] Driver method code {result.returncode}: {stderr}", flush=True)
         except ImportError:
-            print("[DESKTOP] Playwright driver not available", flush=True)
+            print("[DESKTOP] Playwright driver not bundled", flush=True)
         except subprocess.TimeoutExpired:
             print("[DESKTOP] Driver install timed out (10min)", flush=True)
         except Exception as e:
-            print(f"[DESKTOP] Driver method failed: {e}", flush=True)
+            print(f"[DESKTOP] Driver method failed: {type(e).__name__}: {e}", flush=True)
 
-    # Method 2: Try PowerShell/system Python as fallback (for Windows)
+    # Method 2: Try system Python (for Windows machines with Python installed)
     if not installed and platform.system() == "Windows":
-        try:
-            print("[DESKTOP] Method 2: PowerShell pip + playwright install...", flush=True)
-            env = os.environ.copy()
-            env["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers_dir)
-            # Try using system python if available
-            for py_cmd in ["python", "python3", "py"]:
-                try:
-                    result = subprocess.run(
-                        [py_cmd, "-m", "playwright", "install", "chromium"],
-                        env=env,
-                        capture_output=True,
-                        text=True,
-                        timeout=600,
-                    )
-                    if result.returncode == 0:
-                        print(f"[DESKTOP] Chromium installed via {py_cmd}", flush=True)
-                        installed = True
-                        break
-                except FileNotFoundError:
-                    continue
-                except subprocess.TimeoutExpired:
-                    print(f"[DESKTOP] {py_cmd} method timed out", flush=True)
+        env = os.environ.copy()
+        env["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers_dir)
+        for py_cmd in ["py", "python", "python3"]:
+            try:
+                print(f"[DESKTOP] Method 2: {py_cmd} -m playwright install...", flush=True)
+                result = subprocess.run(
+                    [py_cmd, "-m", "playwright", "install", "chromium"],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
+                if result.returncode == 0:
+                    print(f"[DESKTOP] Chromium installed via {py_cmd}", flush=True)
+                    installed = True
                     break
-        except Exception as e:
-            print(f"[DESKTOP] Fallback method failed: {e}", flush=True)
+            except FileNotFoundError:
+                continue
+            except subprocess.TimeoutExpired:
+                print(f"[DESKTOP] {py_cmd} method timed out", flush=True)
+                break
+            except Exception:
+                continue
 
-    # Method 3: Try npx playwright (if Node.js is available)
+    # Method 3: Try npx playwright (if Node.js is available on the system)
     if not installed:
         try:
             npx_cmd = "npx.cmd" if platform.system() == "Windows" else "npx"
@@ -150,13 +211,19 @@ def _ensure_playwright_chromium(data_dir: Path):
                 installed = True
         except FileNotFoundError:
             pass
-        except Exception as e:
-            print(f"[DESKTOP] npx method failed: {e}", flush=True)
+        except Exception:
+            pass
 
-    if not installed:
+    # ---- Post-install verification ----
+    if installed and _find_chromium_in_dir(browsers_dir):
+        print("[DESKTOP] Chromium install VERIFIED — PDF generation enabled", flush=True)
+    elif installed:
+        print("[DESKTOP] WARNING: Install reported success but Chromium dir not found", flush=True)
+        print(f"[DESKTOP] Checked: {browsers_dir}", flush=True)
+    else:
         print("[DESKTOP] WARNING: Chromium not installed — PDF generation unavailable", flush=True)
         print("[DESKTOP] Reports will still generate HTML and Excel formats", flush=True)
-        print("[DESKTOP] To fix: run 'playwright install chromium' manually", flush=True)
+        print("[DESKTOP] To fix manually: pip install playwright && playwright install chromium", flush=True)
 
 
 def main():

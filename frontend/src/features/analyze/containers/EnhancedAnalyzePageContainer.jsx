@@ -75,6 +75,7 @@ import {
   generateCharts,
   exportAnalysis,
 } from '../services/enhancedAnalyzeApi'
+import { normalizeChartSpec } from '../services/analyzeApi'
 import { neutral, palette } from '@/app/theme'
 
 // Animated stat card
@@ -721,7 +722,11 @@ export default function EnhancedAnalyzePageContainer() {
           if (result.event === 'result') {
             setAnalysisResult(result)
             setSuggestedQuestions(result.suggested_questions || [])
-            setGeneratedCharts(result.chart_suggestions || [])
+            setGeneratedCharts(
+              (result.chart_suggestions || [])
+                .map((c, idx) => ({ ...c, ...normalizeChartSpec(c, idx) }))
+                .filter(Boolean)
+            )
             setActiveTab(0)
             toast.show('Analysis complete!', 'success')
           }
@@ -818,7 +823,10 @@ export default function EnhancedAnalyzePageContainer() {
           })
 
           if (response.charts?.length) {
-            setGeneratedCharts((prev) => [...response.charts, ...prev])
+            const normalized = response.charts
+              .map((c, i) => ({ ...c, ...normalizeChartSpec(c, i) }))
+              .filter(Boolean)
+            setGeneratedCharts((prev) => [...normalized, ...prev])
             setChartQuery('')
             toast.show(`Generated ${response.charts.length} chart(s)`, 'success')
           } else {
@@ -1639,7 +1647,7 @@ export default function EnhancedAnalyzePageContainer() {
                               </Typography>
                             )}
                             <Box sx={{ height: 320 }}>
-                              <ZoomableChart chart={chart} data={chart.data} height={300} />
+                              <ZoomableChart spec={chart} data={chart.data} height={300} />
                             </Box>
                             {chart.ai_insights?.length > 0 && (
                               <Box

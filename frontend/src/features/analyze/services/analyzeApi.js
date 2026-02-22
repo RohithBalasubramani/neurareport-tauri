@@ -141,9 +141,11 @@ export function normalizeChartSpec(chart, idx = 0) {
   if (!chart || typeof chart !== 'object') return null
 
   const type = typeof chart.type === 'string' ? chart.type.toLowerCase().trim() : 'bar'
-  const xField = typeof chart.xField === 'string' ? chart.xField.trim() : ''
+  // Backend returns snake_case (x_field), frontend uses camelCase (xField) — accept both
+  const rawX = chart.xField ?? chart.x_field ?? ''
+  const xField = typeof rawX === 'string' ? rawX.trim() : ''
 
-  let yFields = chart.yFields
+  let yFields = chart.yFields ?? chart.y_fields
   if (typeof yFields === 'string') {
     yFields = [yFields]
   }

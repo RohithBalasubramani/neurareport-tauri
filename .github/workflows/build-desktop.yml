@@ -256,20 +256,25 @@ jobs:
           # --appimage-extract-and-run: needed on CI (no FUSE)
           # NO_STRIP=1: linuxdeploy's bundled strip chokes on some ELF sections
           # LD_LIBRARY_PATH: help linuxdeploy find PyInstaller's custom-named .so files
+          # linuxdeploy outputs the AppImage to $PWD, so cd into the target dir first
+          cd "$APPIMAGE_DIR"
           NO_STRIP=1 \
           ARCH=x86_64 \
-          LD_LIBRARY_PATH="$APPDIR/usr/lib/NeuraReport/_internal:$APPDIR/usr/lib/NeuraReport/_internal/pillow.libs" \
+          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/$APPDIR/usr/lib/NeuraReport/_internal:$GITHUB_WORKSPACE/$APPDIR/usr/lib/NeuraReport/_internal/pillow.libs" \
           "$HOME/.cache/tauri/linuxdeploy-x86_64.AppImage" --appimage-extract-and-run \
-            --appdir "$APPDIR" \
+            --appdir "$GITHUB_WORKSPACE/$APPDIR" \
             --output appimage
+          cd "$GITHUB_WORKSPACE"
 
-          # Rename to standard name
-          mv "$APPIMAGE_DIR"/NeuraReport*.AppImage "$APPIMAGE_DIR/NeuraReport-x86_64.AppImage" 2>/dev/null || true
-
-          if [ ! -f "$APPIMAGE_DIR/NeuraReport-x86_64.AppImage" ]; then
-            echo "ERROR: AppImage creation failed"
+          # Find and rename the output
+          APPIMAGE_FILE="$(ls "$APPIMAGE_DIR"/NeuraReport*.AppImage 2>/dev/null | head -1)"
+          if [ -z "$APPIMAGE_FILE" ]; then
+            echo "ERROR: AppImage creation failed — listing dir contents:"
+            ls -la "$APPIMAGE_DIR"/ || true
+            ls -la NeuraReport*.AppImage 2>/dev/null || true
             exit 1
           fi
+          mv "$APPIMAGE_FILE" "$APPIMAGE_DIR/NeuraReport-x86_64.AppImage" 2>/dev/null || true
           echo "OK: AppImage created ($(du -h "$APPIMAGE_DIR/NeuraReport-x86_64.AppImage" | cut -f1))"
 
       - name: Upload Linux AppImage

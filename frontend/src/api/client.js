@@ -3259,6 +3259,45 @@ export async function setUserPreference(key, value) {
 }
 
 
+/* ------------------------ SMTP Settings API ------------------------ */
+
+/**
+ * Get saved SMTP settings (password masked).
+ */
+export async function getSmtpSettings() {
+  if (isMock) {
+    await sleep(100)
+    return { smtp: {} }
+  }
+  const { data } = await api.get('/analytics/settings/smtp')
+  return data
+}
+
+/**
+ * Save SMTP settings.
+ */
+export async function saveSmtpSettings(settings) {
+  if (isMock) {
+    await sleep(200)
+    return { smtp: settings, message: 'SMTP settings saved' }
+  }
+  const { data } = await api.put('/analytics/settings/smtp', settings)
+  return data
+}
+
+/**
+ * Test SMTP connection.
+ */
+export async function testSmtpConnection() {
+  if (isMock) {
+    await sleep(500)
+    return { status: 'connected', message: 'SMTP connection successful' }
+  }
+  const { data } = await api.post('/analytics/settings/smtp/test')
+  return data
+}
+
+
 /* ------------------------ Export/Backup API ------------------------ */
 
 /**

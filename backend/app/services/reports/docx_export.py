@@ -29,8 +29,12 @@ try:  # pragma: no cover - optional dependency for PDF conversion
 except ImportError:  # pragma: no cover
     Converter = None  # type: ignore
 
-from lxml import etree
-from lxml import html as lxml_html  # type: ignore
+try:
+    from lxml import etree
+    from lxml import html as lxml_html  # type: ignore
+except ImportError:  # pragma: no cover
+    etree = None  # type: ignore
+    lxml_html = None  # type: ignore
 
 from .html_table_parser import extract_tables
 
@@ -477,6 +481,10 @@ def html_file_to_docx(
 
     Returns the output path on success, or None when conversion is unavailable.
     """
+    if lxml_html is None or etree is None:
+        logger.warning("lxml not available — DOCX export disabled")
+        return None
+
     html_text = html_path.read_text(encoding="utf-8", errors="ignore")
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

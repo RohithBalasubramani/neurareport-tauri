@@ -31,6 +31,7 @@ cryptography==46.0.3
 bleach==6.3.0
 filelock==3.20.3
 jsonschema==4.26.0
+lxml==5.4.0
 
 # PDF & Document processing
 pymupdf==1.26.7
@@ -84,6 +85,15 @@ authlib==1.6.6
 
 # Formula Parsing
 lark==1.2.2
+
+# HTTP clients (used by integrations, enrichment, webhooks)
+aiohttp==3.11.18
+beautifulsoup4==4.13.4
+requests==2.32.3
+httpx==0.28.1
+
+# Analytics (scipy used by analytics service)
+scipy==1.15.3
 
 # Prompt Management
 pyyaml==6.0.2

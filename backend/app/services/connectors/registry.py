@@ -106,49 +106,26 @@ def list_connectors_by_type(connector_type: str) -> list[dict[str, Any]]:
 
 # Auto-import all connector modules to trigger registration
 def _auto_register_connectors():
-    """Import all connector modules to register them."""
+    """Import all connector modules to register them.
+
+    Uses importlib + package.__path__ instead of filesystem Path scanning
+    so that module discovery works in PyInstaller frozen bundles.
+    """
     import importlib
     import pkgutil
-    from pathlib import Path
 
-    # Get the package directory
-    package_dir = Path(__file__).parent
+    for subpackage in ("databases", "cloud_storage", "storage", "productivity"):
+        try:
+            pkg = importlib.import_module(f".{subpackage}", __package__)
+        except ImportError:
+            logger.debug(f"Connector subpackage {subpackage} not available")
+            continue
 
-    # Import database connectors
-    databases_dir = package_dir / "databases"
-    if databases_dir.exists():
-        for _, module_name, _ in pkgutil.iter_modules([str(databases_dir)]):
+        for _, module_name, _ in pkgutil.iter_modules(pkg.__path__):
             try:
-                importlib.import_module(f".databases.{module_name}", __package__)
+                importlib.import_module(f".{subpackage}.{module_name}", __package__)
             except ImportError as e:
-                logger.debug(f"Could not import database connector {module_name}: {e}")
-
-    # Import cloud storage connectors
-    cloud_dir = package_dir / "cloud_storage"
-    if cloud_dir.exists():
-        for _, module_name, _ in pkgutil.iter_modules([str(cloud_dir)]):
-            try:
-                importlib.import_module(f".cloud_storage.{module_name}", __package__)
-            except ImportError as e:
-                logger.debug(f"Could not import cloud storage connector {module_name}: {e}")
-
-    # Import storage connectors (alternate folder)
-    storage_dir = package_dir / "storage"
-    if storage_dir.exists():
-        for _, module_name, _ in pkgutil.iter_modules([str(storage_dir)]):
-            try:
-                importlib.import_module(f".storage.{module_name}", __package__)
-            except ImportError as e:
-                logger.debug(f"Could not import storage connector {module_name}: {e}")
-
-    # Import productivity connectors
-    productivity_dir = package_dir / "productivity"
-    if productivity_dir.exists():
-        for _, module_name, _ in pkgutil.iter_modules([str(productivity_dir)]):
-            try:
-                importlib.import_module(f".productivity.{module_name}", __package__)
-            except ImportError as e:
-                logger.debug(f"Could not import productivity connector {module_name}: {e}")
+                logger.debug(f"Could not import {subpackage} connector {module_name}: {e}")
 
 
 # Run auto-registration on module import

@@ -269,6 +269,7 @@ def main():
     os.environ.setdefault("NEURA_STATE_DIR", str(data_dir / "state"))
     os.environ.setdefault("NEURA_ERROR_LOG", str(logs_dir / "backend_errors.log"))
     os.environ.setdefault("NEURA_LLM_LOG", str(logs_dir / "llm.log"))
+    os.environ.setdefault("LLM_RAW_OUTPUT_PATH", str(logs_dir / "llm_raw_outputs.md"))
     os.environ.setdefault(
         "NEURA_DATABASE_URL",
         f"sqlite+aiosqlite:///{data_dir / 'state' / 'neurareport.db'}",

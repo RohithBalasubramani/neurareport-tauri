@@ -109,6 +109,16 @@ hidden_imports = _all_mods + [
     'pyee',
     'pyee.base',
     'pyee.cls',
+    # XML processing (used by docx_export)
+    'lxml',
+    'lxml.etree',
+    'lxml.html',
+    # HTTP clients (used by integrations, enrichment, webhooks)
+    'aiohttp',
+    'bs4',
+    'httpx',
+    'httpx._transports',
+    'httpx._transports.default',
 ]
 
 # --- Data files needed at runtime ---
@@ -202,6 +212,11 @@ a = Analysis(
         'strawberry',
         'prefect',
     ],
+    # CRITICAL: noarchive=True is REQUIRED. Multiple modules use Path(__file__)
+    # to locate data files (schemas, prompts, RBAC configs) at import time.
+    # With noarchive=True, .pyc files are on disk next to data files so these
+    # paths resolve correctly. Removing this will break validation, prompts,
+    # and connector auto-registration.
     noarchive=True,
 )
 

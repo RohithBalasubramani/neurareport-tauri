@@ -17,11 +17,28 @@ permissions:
   contents: write
 
 jobs:
+  # Create a draft release that both build jobs upload to
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: v1.0.0-build.${{ github.run_number }}
+    steps:
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v1.0.0-build.${{ github.run_number }}" \
+            --repo "${{ github.repository }}" \
+            --title "NeuraReport Desktop v1.0.0 (Build ${{ github.run_number }})" \
+            --notes "Building..." \
+            --draft
+
   # ─────────────────────────────────────────────
   # Windows: NSIS installer (.exe)
   # ─────────────────────────────────────────────
   build-windows:
     if: inputs.platform == 'windows' || inputs.platform == 'all'
+    needs: create-release
     runs-on: windows-latest
 
     steps:
@@ -74,8 +91,6 @@ jobs:
             Write-Host "ERROR: Backend exe not found"
             exit 1
           }
-          $pyc = (Get-ChildItem "frontend/src-tauri/neurareport-backend" -Recurse -Filter "*.pyc").Count
-          Write-Host "Bundled .pyc files: $pyc"
 
       - name: Smoke-test backend starts
         shell: pwsh
@@ -111,18 +126,21 @@ jobs:
           NODE_OPTIONS: '--max-old-space-size=8192'
         run: npx tauri build --bundles nsis
 
-      - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: NeuraReport-Windows
-          path: frontend/src-tauri/target/release/bundle/nsis/*.exe
-          if-no-files-found: error
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "v1.0.0-build.${{ github.run_number }}" `
+            frontend/src-tauri/target/release/bundle/nsis/*.exe `
+            --repo "${{ github.repository }}" --clobber
+        shell: pwsh
 
   # ─────────────────────────────────────────────
   # Linux: AppImage (portable single-file)
   # ─────────────────────────────────────────────
   build-linux:
     if: inputs.platform == 'linux' || inputs.platform == 'all'
+    needs: create-release
     runs-on: ubuntu-22.04
 
     steps:
@@ -195,7 +213,6 @@ jobs:
           else
             echo "ERROR: Backend exe not found" && exit 1
           fi
-          echo "Bundled .pyc files: $(find frontend/src-tauri/neurareport-backend -name '*.pyc' | wc -l)"
 
       - name: Build Tauri app (deb)
         working-directory: frontend
@@ -233,7 +250,7 @@ jobs:
           cp "$HOME/.cache/tauri/AppRun-x86_64" "$APPDIR/AppRun"
           chmod +x "$APPDIR/AppRun"
 
-          # Desktop entry (no leading whitespace — .desktop files are strict)
+          # Desktop entry
           cat > "$APPDIR/NeuraReport.desktop" << 'EOF'
           [Desktop Entry]
           Categories=Utility;
@@ -252,11 +269,7 @@ jobs:
             ln -sf neurareport-desktop.png "$APPDIR/.DirIcon"
           fi
 
-          # Build AppImage with PyInstaller-compatible env
-          # --appimage-extract-and-run: needed on CI (no FUSE)
-          # NO_STRIP=1: linuxdeploy's bundled strip chokes on some ELF sections
-          # LD_LIBRARY_PATH: help linuxdeploy find PyInstaller's custom-named .so files
-          # linuxdeploy outputs the AppImage to $PWD, so cd into the target dir first
+          # Build AppImage — cd into target dir (linuxdeploy outputs to $PWD)
           cd "$APPIMAGE_DIR"
           NO_STRIP=1 \
           ARCH=x86_64 \
@@ -266,60 +279,65 @@ jobs:
             --output appimage
           cd "$GITHUB_WORKSPACE"
 
-          # Find and rename the output
+          # Verify
           APPIMAGE_FILE="$(ls "$APPIMAGE_DIR"/NeuraReport*.AppImage 2>/dev/null | head -1)"
           if [ -z "$APPIMAGE_FILE" ]; then
-            echo "ERROR: AppImage creation failed — listing dir contents:"
-            ls -la "$APPIMAGE_DIR"/ || true
-            ls -la NeuraReport*.AppImage 2>/dev/null || true
+            echo "ERROR: AppImage creation failed"
             exit 1
           fi
           mv "$APPIMAGE_FILE" "$APPIMAGE_DIR/NeuraReport-x86_64.AppImage" 2>/dev/null || true
           echo "OK: AppImage created ($(du -h "$APPIMAGE_DIR/NeuraReport-x86_64.AppImage" | cut -f1))"
 
-      - name: Upload Linux AppImage
-        uses: actions/upload-artifact@v4
-        with:
-          name: NeuraReport-Linux
-          path: frontend/src-tauri/target/release/bundle/appimage/NeuraReport-x86_64.AppImage
-          if-no-files-found: error
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "v1.0.0-build.${{ github.run_number }}" \
+            frontend/src-tauri/target/release/bundle/appimage/NeuraReport-x86_64.AppImage \
+            --repo "${{ github.repository }}" --clobber
 
   # ─────────────────────────────────────────────
-  # Create GitHub Release with both installers
+  # Finalize: publish the draft release
   # ─────────────────────────────────────────────
-  release:
-    if: always() && (needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
-    needs: [build-windows, build-linux]
+  finalize-release:
+    if: always() && needs.create-release.result == 'success'
+    needs: [create-release, build-windows, build-linux]
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v1.0.0-build.${{ github.run_number }}"
 
-      - name: List artifacts
-        run: find artifacts -type f -exec ls -lh {} \;
+          # Check what assets were uploaded
+          ASSETS=$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' 2>/dev/null || echo "")
 
-      - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v1.0.0-${{ github.run_number }}
-          name: NeuraReport Desktop v1.0.0 (Build ${{ github.run_number }})
-          body: |
-            ## NeuraReport Desktop v1.0.0
+          if [ -z "$ASSETS" ]; then
+            echo "No assets uploaded — deleting empty release"
+            gh release delete "$TAG" --repo "${{ github.repository }}" --yes 2>/dev/null || true
+            exit 1
+          fi
 
-            ### Download
-            | Platform | File | How to use |
-            |----------|------|------------|
-            | **Windows** | `NeuraReport_1.0.0_x64-setup.exe` | Double-click to install |
-            | **Linux** | `NeuraReport-x86_64.AppImage` | `chmod +x` then double-click to run |
+          echo "Assets: $ASSETS"
 
-            ### First Launch
-            - The app downloads Chromium (~130MB) on first launch for PDF generation
-            - This is a one-time setup that takes 1-2 minutes
-          files: |
-            artifacts/NeuraReport-Windows/*.exe
-            artifacts/NeuraReport-Linux/*.AppImage
-          draft: false
-          prerelease: false
+          # Build the release notes
+          NOTES="## NeuraReport Desktop v1.0.0
+
+          ### Download
+          | Platform | File | How to use |
+          |----------|------|------------|
+          | **Windows** | \`NeuraReport_1.0.0_x64-setup.exe\` | Double-click to install |
+          | **Linux** | \`NeuraReport-x86_64.AppImage\` | \`chmod +x\` then double-click to run |
+
+          ### First Launch
+          - The app downloads Chromium (~130MB) on first launch for PDF generation
+          - This is a one-time setup that takes 1-2 minutes"
+
+          gh release edit "$TAG" \
+            --repo "${{ github.repository }}" \
+            --draft=false \
+            --notes "$NOTES"
+
+          echo "Release published: $TAG"

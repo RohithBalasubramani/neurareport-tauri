@@ -28,6 +28,7 @@ class LibraryDocumentCreate(BaseModel):
     """Request to add a document to the library."""
     title: str
     description: Optional[str] = None
+    content: Optional[str] = None
     file_path: Optional[str] = None
     file_url: Optional[str] = None
     document_type: DocumentType = DocumentType.OTHER

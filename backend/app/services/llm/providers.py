@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
 
 from .config import LLMConfig, LLMProvider
+from backend.app.utils.errors import AppError
 
 logger = logging.getLogger("neura.llm.providers")
 
@@ -131,8 +132,11 @@ class ClaudeCodeCLIProvider(BaseProvider):
         if self._available is None:
             self._available = self._check_cli_available()
         if not self._available:
-            raise RuntimeError(
-                "Claude Code CLI is not available. Install from: https://docs.anthropic.com/claude-code"
+            raise AppError(
+                code="llm_unavailable",
+                message="AI features require Claude Code CLI which is not installed on this machine.",
+                status_code=503,
+                detail="Install Claude Code CLI from https://docs.anthropic.com/claude-code to enable AI-powered features.",
             )
         return True
 
@@ -337,7 +341,12 @@ class ClaudeCodeCLIProvider(BaseProvider):
                     "claude_code_cli_error",
                     extra={"event": "claude_code_cli_error", "error": error_msg, "returncode": result.returncode}
                 )
-                raise RuntimeError(f"Claude Code CLI error: {error_msg}")
+                raise AppError(
+                    code="llm_call_failed",
+                    message="AI request failed. Claude Code CLI returned an error.",
+                    status_code=502,
+                    detail=error_msg,
+                )
 
             content = result.stdout.strip()
             elapsed = time.time() - start_time
@@ -375,15 +384,24 @@ class ClaudeCodeCLIProvider(BaseProvider):
             }
 
         except subprocess.TimeoutExpired:
-            raise RuntimeError(
-                f"Claude Code CLI timed out after {self.config.timeout_seconds} seconds"
+            raise AppError(
+                code="llm_timeout",
+                message=f"AI request timed out after {self.config.timeout_seconds}s. Try a simpler query.",
+                status_code=504,
             )
+        except AppError:
+            raise  # Already structured — don't wrap again
         except Exception as e:
             logger.error(
                 "claude_code_cli_failed",
                 extra={"event": "claude_code_cli_failed", "error": _sanitize_error(e)}
             )
-            raise
+            raise AppError(
+                code="llm_error",
+                message="AI request failed unexpectedly.",
+                status_code=502,
+                detail=_sanitize_error(e),
+            )
 
     def chat_completion_stream(
         self,

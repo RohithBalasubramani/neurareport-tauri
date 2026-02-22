@@ -962,6 +962,7 @@ class StateStore:
         email_message: Optional[str],
         frequency: str,
         interval_minutes: int,
+        run_time: Optional[str] = None,
         next_run_at: str,
         first_run_at: str,
         active: bool = True,
@@ -989,6 +990,7 @@ class StateStore:
                 "email_message": (email_message or "").strip() or None,
                 "frequency": frequency,
                 "interval_minutes": max(int(interval_minutes or 0), 1),
+                "run_time": (run_time or "").strip() or None,
                 "next_run_at": next_run_at,
                 "first_run_at": first_run_at,
                 "last_run_at": None,
@@ -2174,11 +2176,9 @@ class StateStore:
 
     def add_favorite(self, entity_type: str, entity_id: str) -> bool:
         """Add an item to favorites. Returns True if added, False if already exists."""
-        if entity_type not in ("templates", "connections"):
-            return False
         with self._lock:
             state = self._read_state()
-            favorites = state.get("favorites") or {"templates": [], "connections": []}
+            favorites = state.get("favorites") or {}
             items = list(favorites.get(entity_type) or [])
             if entity_id in items:
                 return False
@@ -2190,11 +2190,9 @@ class StateStore:
 
     def remove_favorite(self, entity_type: str, entity_id: str) -> bool:
         """Remove an item from favorites. Returns True if removed, False if not found."""
-        if entity_type not in ("templates", "connections"):
-            return False
         with self._lock:
             state = self._read_state()
-            favorites = state.get("favorites") or {"templates": [], "connections": []}
+            favorites = state.get("favorites") or {}
             items = list(favorites.get(entity_type) or [])
             if entity_id not in items:
                 return False
@@ -2206,11 +2204,9 @@ class StateStore:
 
     def is_favorite(self, entity_type: str, entity_id: str) -> bool:
         """Check if an item is a favorite."""
-        if entity_type not in ("templates", "connections"):
-            return False
         with self._lock:
             state = self._read_state()
-            favorites = state.get("favorites") or {"templates": [], "connections": []}
+            favorites = state.get("favorites") or {}
             items = favorites.get(entity_type) or []
             return entity_id in items
 

@@ -167,13 +167,15 @@ const ArtifactButton = styled(IconButton)(({ theme }) => ({
 // =============================================================================
 
 const getStatusConfig = (theme, status) => {
+  const completedCfg = {
+    icon: CheckCircleIcon,
+    color: theme.palette.text.secondary,
+    bgColor: theme.palette.mode === 'dark' ? alpha(theme.palette.text.primary, 0.1) : neutral[100],
+    label: 'Completed',
+  }
   const configs = {
-    completed: {
-      icon: CheckCircleIcon,
-      color: theme.palette.text.secondary,
-      bgColor: theme.palette.mode === 'dark' ? alpha(theme.palette.text.primary, 0.1) : neutral[100],
-      label: 'Completed',
-    },
+    completed: completedCfg,
+    succeeded: completedCfg,
     failed: {
       icon: ErrorIcon,
       color: theme.palette.text.secondary,
@@ -191,6 +193,12 @@ const getStatusConfig = (theme, status) => {
       color: theme.palette.text.secondary,
       bgColor: theme.palette.mode === 'dark' ? alpha(theme.palette.text.primary, 0.08) : neutral[50],
       label: 'Pending',
+    },
+    queued: {
+      icon: HourglassEmptyIcon,
+      color: theme.palette.text.secondary,
+      bgColor: theme.palette.mode === 'dark' ? alpha(theme.palette.text.primary, 0.08) : neutral[50],
+      label: 'Queued',
     },
     cancelled: {
       icon: CancelIcon,
@@ -322,7 +330,29 @@ export default function HistoryPage() {
       else if (format === 'xlsx' && artifacts.xlsx_url) url = artifacts.xlsx_url
 
       if (url) {
-        window.open(api.withBase(url), '_blank')
+        const fullUrl = api.withBase(url)
+        const filename = `${report.templateName || 'report'}.${format}`
+        toast.show(`Downloading ${filename}…`, 'info')
+        fetch(fullUrl)
+          .then((res) => {
+            if (!res.ok) throw new Error(`Download failed: ${res.status}`)
+            return res.blob()
+          })
+          .then((blob) => {
+            const blobUrl = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = blobUrl
+            a.download = filename
+            document.body.appendChild(a)
+            a.click()
+            document.body.removeChild(a)
+            URL.revokeObjectURL(blobUrl)
+            toast.show(`Downloaded ${filename}`, 'success')
+          })
+          .catch((err) => {
+            console.error('[download]', err)
+            toast.show(`Download failed: ${err.message}`, 'error')
+          })
       } else {
         toast.show('Download not available', 'warning')
       }
@@ -561,7 +591,7 @@ export default function HistoryPage() {
         if (!hasAny) {
           return (
             <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled' }}>
-              {row.status === 'completed' ? 'No files' : '-'}
+              {(row.status === 'completed' || row.status === 'succeeded') ? 'No files' : '-'}
             </Typography>
           )
         }

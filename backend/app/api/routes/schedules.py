@@ -8,7 +8,8 @@ This module contains endpoints for report scheduling:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
@@ -30,6 +31,24 @@ router = APIRouter(dependencies=[Depends(require_api_key)])
 
 def _correlation(request: Request) -> str | None:
     return getattr(request.state, "correlation_id", None)
+
+
+_RUN_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def _validate_run_time(run_time: str | None) -> None:
+    """Raise 422 if run_time is provided but not valid HH:MM."""
+    if run_time is None:
+        return
+    if not _RUN_TIME_RE.match(run_time.strip()):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "status": "error",
+                "code": "invalid_run_time",
+                "message": "run_time must be in HH:MM format (24-hour, e.g. '08:00' or '18:30').",
+            },
+        )
 
 
 async def _refresh_scheduler() -> None:
@@ -59,6 +78,7 @@ async def create_report_schedule(payload: ScheduleCreatePayload, request: Reques
             status_code=422,
             detail={"status": "error", "code": "invalid_interval", "message": "interval_minutes must be a positive integer (>= 1), or omit to use frequency default."},
         )
+    _validate_run_time(payload.run_time)
     schedule = create_schedule(payload)
     await _refresh_scheduler()
     return {"schedule": schedule, "correlation_id": _correlation(request)}
@@ -79,6 +99,7 @@ def get_report_schedule(schedule_id: str, request: Request):
 @router.put("/{schedule_id}")
 async def update_report_schedule(schedule_id: str, payload: ScheduleUpdatePayload, request: Request):
     """Update an existing report schedule."""
+    _validate_run_time(payload.run_time)
     schedule = update_schedule(schedule_id, payload)
     await _refresh_scheduler()
     return {"schedule": schedule, "correlation_id": _correlation(request)}
@@ -124,19 +145,24 @@ async def trigger_schedule(schedule_id: str, background_tasks: BackgroundTasks, 
         scheduler_runner,
     )
 
+    # Dynamic date range based on frequency (daily=yesterday→today, weekly=7d, monthly=30d)
+    from backend.app.services.jobs.report_scheduler import _compute_dynamic_dates
+    frequency = str(schedule.get("frequency") or "daily").strip().lower()
+    dyn_start, dyn_end = _compute_dynamic_dates(frequency)
+
     # Build the payload from schedule data
     payload = {
         "template_id": schedule.get("template_id"),
         "connection_id": schedule.get("connection_id"),
-        "start_date": schedule.get("start_date"),
-        "end_date": schedule.get("end_date"),
+        "start_date": dyn_start,
+        "end_date": dyn_end,
         "batch_ids": schedule.get("batch_ids") or None,
         "key_values": schedule.get("key_values") or None,
         "docx": bool(schedule.get("docx")),
         "xlsx": bool(schedule.get("xlsx")),
         "email_recipients": schedule.get("email_recipients") or None,
         "email_subject": schedule.get("email_subject") or f"[Manual Trigger] {schedule.get('name') or schedule.get('template_id')}",
-        "email_message": schedule.get("email_message") or f"Manually triggered run for schedule '{schedule.get('name')}'.",
+        "email_message": schedule.get("email_message") or f"Manually triggered run for schedule '{schedule.get('name')}'.\nWindow: {dyn_start} - {dyn_end}.",
         "schedule_id": schedule_id,
         "schedule_name": schedule.get("name"),
     }

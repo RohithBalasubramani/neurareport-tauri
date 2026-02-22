@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from apscheduler.executors.asyncio import AsyncIOExecutor
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from backend.app.repositories.state import state_store
@@ -43,6 +44,24 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _compute_dynamic_dates(frequency: str) -> tuple[str, str]:
+    """Compute dynamic start/end date strings based on schedule frequency.
+
+    - daily:   yesterday → today
+    - weekly:  7 days ago → today
+    - monthly: 30 days ago → today
+    """
+    today = _now_utc().date()
+    freq = (frequency or "daily").strip().lower()
+    if freq == "weekly":
+        start = today - timedelta(days=7)
+    elif freq == "monthly":
+        start = today - timedelta(days=30)
+    else:  # daily (default)
+        start = today - timedelta(days=1)
+    return start.isoformat(), today.isoformat()
+
+
 def _next_run_datetime(schedule: dict, baseline: datetime) -> datetime:
     minutes = schedule.get("interval_minutes") or 0
     minutes = max(int(minutes), 1)
@@ -55,8 +74,44 @@ def _schedule_signature(schedule: dict) -> str:
         str(schedule.get("start_date") or ""),
         str(schedule.get("end_date") or ""),
         "1" if schedule.get("active", True) else "0",
+        str(schedule.get("run_time") or ""),
+        str(schedule.get("frequency") or ""),
     ]
     return "|".join(parts)
+
+
+def _parse_run_time(run_time: str | None) -> tuple[int, int] | None:
+    """Parse 'HH:MM' string into (hour, minute) or None."""
+    if not run_time:
+        return None
+    try:
+        parts = run_time.strip().split(":")
+        h, m = int(parts[0]), int(parts[1])
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            return (h, m)
+    except (ValueError, IndexError):
+        pass
+    return None
+
+
+def _build_cron_trigger(
+    frequency: str, hour: int, minute: int,
+    start_date: datetime | None, end_date: datetime | None,
+) -> CronTrigger:
+    """Build a CronTrigger for the given frequency and time-of-day."""
+    kwargs: dict = {"hour": hour, "minute": minute, "timezone": timezone.utc}
+    if start_date:
+        kwargs["start_date"] = start_date
+    if end_date:
+        kwargs["end_date"] = end_date
+
+    if frequency == "weekly":
+        kwargs["day_of_week"] = "mon"
+    elif frequency == "monthly":
+        kwargs["day"] = 1
+    # daily (default): runs every day at the specified time — no extra args needed
+
+    return CronTrigger(**kwargs)
 
 
 def _scheduler_db_url() -> str:
@@ -190,12 +245,20 @@ class ReportScheduler:
             if job:
                 self._remove_job(schedule_id)
 
-            trigger = IntervalTrigger(
-                minutes=interval_minutes,
-                start_date=start_date,
-                end_date=end_date,
-                timezone=timezone.utc,
-            )
+            run_time = _parse_run_time(schedule.get("run_time"))
+            if run_time:
+                frequency = str(schedule.get("frequency") or "daily").strip().lower()
+                trigger = _build_cron_trigger(
+                    frequency, run_time[0], run_time[1],
+                    start_date, end_date,
+                )
+            else:
+                trigger = IntervalTrigger(
+                    minutes=interval_minutes,
+                    start_date=start_date,
+                    end_date=end_date,
+                    timezone=timezone.utc,
+                )
             job = self._scheduler.add_job(
                 self._run_schedule,
                 trigger=trigger,
@@ -240,11 +303,15 @@ class ReportScheduler:
         correlation_id = f"sched-{schedule_id or 'job'}-{started.timestamp():.0f}"
         job_tracker: JobRunTracker | None = None
         try:
+            # Dynamic date range based on frequency (daily=yesterday→today, weekly=7d, monthly=30d)
+            frequency = str(schedule.get("frequency") or "daily").strip().lower()
+            dyn_start, dyn_end = _compute_dynamic_dates(frequency)
+
             payload = {
                 "template_id": schedule.get("template_id"),
                 "connection_id": schedule.get("connection_id"),
-                "start_date": schedule.get("start_date"),
-                "end_date": schedule.get("end_date"),
+                "start_date": dyn_start,
+                "end_date": dyn_end,
                 "batch_ids": schedule.get("batch_ids") or None,
                 "key_values": schedule.get("key_values") or None,
                 "docx": bool(schedule.get("docx")),
@@ -255,7 +322,7 @@ class ReportScheduler:
                 "email_message": schedule.get("email_message")
                 or (
                     f"Scheduled run '{schedule.get('name')}' completed.\n"
-                    f"Window: {schedule.get('start_date')} - {schedule.get('end_date')}."
+                    f"Window: {dyn_start} - {dyn_end}."
                 ),
                 "schedule_id": schedule_id,
                 "schedule_name": schedule.get("name"),

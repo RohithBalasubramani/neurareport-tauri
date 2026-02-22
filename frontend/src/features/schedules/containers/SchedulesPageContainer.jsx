@@ -3,7 +3,7 @@
  * Sophisticated scheduling interface with premium styling
  */
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import {
   Box,
   Container,
@@ -176,9 +176,9 @@ const FrequencyChip = styled(Chip)(({ theme }) => ({
 
 const StyledSwitch = styled(Switch)(({ theme }) => ({
   '& .MuiSwitch-switchBase.Mui-checked': {
-    color: theme.palette.mode === 'dark' ? neutral[500] : neutral[700],
+    color: theme.palette.mode === 'dark' ? neutral[400] : neutral[400],
     '& + .MuiSwitch-track': {
-      backgroundColor: theme.palette.mode === 'dark' ? neutral[500] : neutral[700],
+      backgroundColor: theme.palette.mode === 'dark' ? neutral[400] : neutral[400],
     },
   },
 }))
@@ -332,6 +332,7 @@ function ScheduleDialog({
     startDate: '',
     endDate: '',
     frequency: 'daily',
+    runTime: '',
     emailRecipients: '',
     emailSubject: '',
     emailMessage: '',
@@ -349,6 +350,7 @@ function ScheduleDialog({
         startDate: extractDateOnly(schedule.start_date),
         endDate: extractDateOnly(schedule.end_date),
         frequency: schedule.frequency || 'daily',
+        runTime: schedule.run_time || '',
         emailRecipients: formatEmailList(schedule.email_recipients),
         emailSubject: schedule.email_subject || '',
         emailMessage: schedule.email_message || '',
@@ -365,6 +367,7 @@ function ScheduleDialog({
       startDate: '',
       endDate: '',
       frequency: 'daily',
+      runTime: '',
       emailRecipients: '',
       emailSubject: '',
       emailMessage: '',
@@ -418,6 +421,7 @@ function ScheduleDialog({
         endDate,
         frequency: form.frequency,
         intervalMinutes,
+        runTime: form.runTime || undefined,
         emailRecipients: emailRecipients.length ? emailRecipients : undefined,
         emailSubject: form.emailSubject || undefined,
         emailMessage: form.emailMessage || undefined,
@@ -520,16 +524,27 @@ function ScheduleDialog({
             />
           </Stack>
 
-          <StyledFormControl fullWidth>
-            <InputLabel>Frequency</InputLabel>
-            <Select value={form.frequency} onChange={handleChange('frequency')} label="Frequency">
-              {FREQUENCY_OPTIONS.map((opt) => (
-                <MenuItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </MenuItem>
-              ))}
-            </Select>
-          </StyledFormControl>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+            <StyledFormControl fullWidth>
+              <InputLabel>Frequency</InputLabel>
+              <Select value={form.frequency} onChange={handleChange('frequency')} label="Frequency">
+                {FREQUENCY_OPTIONS.map((opt) => (
+                  <MenuItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            </StyledFormControl>
+            <StyledTextField
+              label="Run At"
+              type="time"
+              value={form.runTime}
+              onChange={handleChange('runTime')}
+              InputLabelProps={{ shrink: true }}
+              fullWidth
+              helperText="Time of day to run (leave blank for interval-based)"
+            />
+          </Stack>
         </Stack>
 
         <SectionLabel>
@@ -598,6 +613,7 @@ export default function SchedulesPage() {
   // UX Governance: Enforced interaction API - ALL user actions flow through this
   const { execute } = useInteraction()
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
   const templates = useAppStore((s) => s.templates)
   const savedConnections = useAppStore((s) => s.savedConnections)
   const activeConnectionId = useAppStore((s) => s.activeConnectionId)
@@ -768,6 +784,22 @@ export default function SchedulesPage() {
     await handleToggleSchedule(menuSchedule, nextActive)
     handleCloseMenu()
   }, [menuSchedule, handleCloseMenu, handleToggleSchedule])
+
+  const handleRunNow = useCallback(async () => {
+    if (!menuSchedule) return
+    handleCloseMenu()
+    try {
+      const result = await api.triggerSchedule(menuSchedule.id)
+      if (result?.status === 'triggered') {
+        toast.show(`Schedule "${menuSchedule.name}" triggered`, 'success')
+        navigate('/jobs')
+      } else {
+        toast.show('Schedule triggered', 'success')
+      }
+    } catch (err) {
+      toast.show(err?.response?.data?.detail?.message || 'Failed to trigger schedule', 'error')
+    }
+  }, [menuSchedule, handleCloseMenu, toast, navigate])
 
   const handleSaveSchedule = useCallback(
     async (data) => {
@@ -1050,6 +1082,12 @@ export default function SchedulesPage() {
         />
 
         <StyledMenu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={handleCloseMenu} TransitionComponent={Fade}>
+          <StyledMenuItem onClick={handleRunNow}>
+            <ListItemIcon>
+              <PlayArrowIcon fontSize="small" sx={{ color: 'primary.main' }} />
+            </ListItemIcon>
+            <ListItemText>Run Now</ListItemText>
+          </StyledMenuItem>
           <StyledMenuItem onClick={handleEditSchedule}>
             <ListItemIcon>
               <EditIcon fontSize="small" />

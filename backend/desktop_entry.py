@@ -49,6 +49,35 @@ def _clean_stale_locks(data_dir: Path):
         print(f"[DESKTOP] Cleaned {cleaned} stale lock file(s) from previous session", flush=True)
 
 
+def _seed_smtp_defaults(state_dir: Path):
+    """Seed SMTP settings into the state store on first run."""
+    import json
+    state_path = state_dir / "state.json"
+    try:
+        if state_path.exists():
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        else:
+            state = {}
+        prefs = state.get("user_preferences", {})
+        smtp = prefs.get("smtp", {})
+        if smtp.get("host"):
+            return  # Already configured
+        # Seed with default SMTP config
+        prefs["smtp"] = {
+            "host": "smtp.gmail.com",
+            "port": 587,
+            "sender": "rohith@neuract.in",
+            "username": "rohith@neuract.in",
+            "password": "phhd dkzq gpou njfh",
+            "use_tls": True,
+        }
+        state["user_preferences"] = prefs
+        state_path.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
+        print("[DESKTOP] Seeded default SMTP settings", flush=True)
+    except Exception as e:
+        print(f"[DESKTOP] SMTP seed skipped: {e}", flush=True)
+
+
 def _find_chromium_in_dir(d: Path) -> bool:
     """Check if a directory contains an installed Chromium browser."""
     if not d.exists():
@@ -280,6 +309,9 @@ def main():
         "NEURA_DATABASE_URL",
         f"sqlite+aiosqlite:///{data_dir / 'state' / 'neurareport.db'}",
     )
+
+    # Seed default SMTP settings if not already configured
+    _seed_smtp_defaults(data_dir / "state")
 
     # Ensure Playwright Chromium is available for PDF generation
     _ensure_playwright_chromium(data_dir)

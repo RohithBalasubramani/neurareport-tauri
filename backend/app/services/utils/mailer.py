@@ -42,19 +42,47 @@ class MailerConfig:
     enabled: bool
 
 
+def _load_from_state_store() -> dict | None:
+    """Try to load SMTP settings from the persistent state store."""
+    try:
+        from backend.app.services.state_access import get_user_preferences
+        prefs = get_user_preferences()
+        smtp = prefs.get("smtp")
+        if smtp and isinstance(smtp, dict) and smtp.get("host"):
+            return smtp
+    except Exception:
+        pass
+    return None
+
+
 def _load_mailer_config() -> MailerConfig:
-    host = os.getenv("NEURA_MAIL_HOST")
-    sender = os.getenv("NEURA_MAIL_SENDER")
-    username = os.getenv("NEURA_MAIL_USERNAME")
-    password = os.getenv("NEURA_MAIL_PASSWORD")
-    port = _env_int("NEURA_MAIL_PORT", 587)
-    use_tls = _env_bool("NEURA_MAIL_USE_TLS", True)
+    # Priority: state store (UI-configured) > environment variables
+    stored = _load_from_state_store()
+    if stored:
+        host = stored.get("host")
+        sender = stored.get("sender")
+        username = stored.get("username")
+        password = stored.get("password")
+        port = int(stored.get("port") or 587)
+        use_tls = bool(stored.get("use_tls", True))
+        source = "state_store"
+    else:
+        host = os.getenv("NEURA_MAIL_HOST")
+        sender = os.getenv("NEURA_MAIL_SENDER")
+        username = os.getenv("NEURA_MAIL_USERNAME")
+        password = os.getenv("NEURA_MAIL_PASSWORD")
+        port = _env_int("NEURA_MAIL_PORT", 587)
+        use_tls = _env_bool("NEURA_MAIL_USE_TLS", True)
+        source = "env"
+
     enabled = bool(host and sender)
     if not enabled:
         logger.info(
             "mail_disabled",
-            extra={"event": "mail_disabled", "reason": "host_or_sender_missing", "host": bool(host), "sender": bool(sender)},
+            extra={"event": "mail_disabled", "reason": "host_or_sender_missing", "host": bool(host), "sender": bool(sender), "source": source},
         )
+    else:
+        logger.info("mail_configured", extra={"event": "mail_configured", "source": source, "host": host})
     return MailerConfig(
         host=host,
         port=port,
@@ -66,7 +94,19 @@ def _load_mailer_config() -> MailerConfig:
     )
 
 
-MAILER_CONFIG = _load_mailer_config()
+# Lazy-loaded: None means "not yet loaded".  At import time the state store
+# may not be initialised yet (e.g. PyInstaller desktop app), so we defer the
+# first load to the moment the config is actually needed.  This guarantees
+# stored SMTP settings are picked up even after a cold restart.
+MAILER_CONFIG: MailerConfig | None = None
+
+
+def _get_config() -> MailerConfig:
+    """Return the current config, lazy-loading on first access."""
+    global MAILER_CONFIG
+    if MAILER_CONFIG is None:
+        MAILER_CONFIG = _load_mailer_config()
+    return MAILER_CONFIG
 
 
 def refresh_mailer_config() -> MailerConfig:
@@ -96,7 +136,7 @@ def send_report_email(
     body: str,
     attachments: Sequence[Path] | None = None,
 ) -> bool:
-    config = MAILER_CONFIG
+    config = _get_config()
     recipients = _normalize_recipients(to_addresses)
     if not recipients:
         return False

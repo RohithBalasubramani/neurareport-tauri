@@ -435,6 +435,12 @@ def fill_and_print(
         pdf_path_resolved = pdf_path.resolve()
         base_url = base_dir_resolved.as_uri()
 
+        # Ensure Playwright uses a writable temp dir (avoids /tmp quota issues)
+        if not os.environ.get("TMPDIR"):
+            _fallback_tmp = Path.home() / ".tmp"
+            if _fallback_tmp.is_dir():
+                os.environ["TMPDIR"] = str(_fallback_tmp)
+
         async with async_playwright() as p:
             browser = await p.chromium.launch()
             context = None

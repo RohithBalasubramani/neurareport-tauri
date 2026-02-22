@@ -2141,6 +2141,7 @@ export async function createSchedule(payload) {
     email_message: payload.emailMessage,
     frequency: payload.frequency || 'daily',
     interval_minutes: payload.intervalMinutes,
+    run_time: payload.runTime || null,
     name: payload.name,
     active: payload.active,
   }
@@ -2171,6 +2172,7 @@ export async function updateSchedule(scheduleId, payload) {
   if (payload.frequency !== undefined) apiPayload.frequency = payload.frequency
   if (payload.intervalMinutes !== undefined) apiPayload.interval_minutes = payload.intervalMinutes
   if (payload.active !== undefined) apiPayload.active = payload.active
+  if (payload.runTime !== undefined) apiPayload.run_time = payload.runTime || null
 
   if (isMock) {
     if (typeof mock.updateSchedule === 'function') {
@@ -2193,6 +2195,16 @@ export async function deleteSchedule(scheduleId) {
     return { status: 'ok', schedule_id: scheduleId }
   }
   const { data } = await api.delete(`/reports/schedules/${encodeURIComponent(scheduleId)}`)
+  return data
+}
+
+export async function triggerSchedule(scheduleId) {
+  if (!scheduleId) throw new Error('Missing schedule id')
+  if (isMock) {
+    await sleep(300)
+    return { status: 'triggered', schedule_id: scheduleId, job_id: `mock-job-${Date.now()}` }
+  }
+  const { data } = await api.post(`/reports/schedules/${encodeURIComponent(scheduleId)}/trigger`)
   return data
 }
 
@@ -2534,6 +2546,15 @@ export async function generateDocx(runId) {
   if (!runId) throw new Error('Missing run id')
   const { data } = await api.post(`/reports/runs/${encodeURIComponent(runId)}/generate-docx`)
   return data?.run || data
+}
+
+/**
+ * Queue DOCX generation as a background job (non-blocking).
+ */
+export async function generateDocxJob(runId) {
+  if (!runId) throw new Error('Missing run id')
+  const { data } = await api.post(`/reports/jobs/generate-docx/${encodeURIComponent(runId)}`)
+  return data
 }
 
 // D) Discovery helper - delegates to discoverReports with simplified interface

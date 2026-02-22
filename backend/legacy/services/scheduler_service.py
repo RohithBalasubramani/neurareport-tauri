@@ -113,6 +113,7 @@ def create_schedule(payload: ScheduleCreatePayload) -> dict[str, Any]:
         email_message=payload.email_message,
         frequency=payload.frequency,
         interval_minutes=interval_minutes,
+        run_time=payload.run_time,
         next_run_at=now_iso,
         first_run_at=now_iso,
         active=payload.active,
@@ -160,6 +161,8 @@ def update_schedule(schedule_id: str, payload: ScheduleUpdatePayload) -> dict[st
     elif payload.interval_minutes is not None:
         # Only interval_minutes provided without frequency
         changes["interval_minutes"] = payload.interval_minutes
+    if payload.run_time is not None:
+        changes["run_time"] = payload.run_time
     if payload.active is not None:
         changes["active"] = payload.active
 

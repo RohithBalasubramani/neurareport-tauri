@@ -16,7 +16,7 @@ from backend.app.services.security import require_api_key
 from backend.app.services.config import Settings, get_settings
 from backend.app.api.middleware import limiter
 from backend.app.services.analyze.document_analysis_service import _analysis_cache
-from backend.app.services.utils.mailer import MAILER_CONFIG, refresh_mailer_config
+from backend.app.services.utils.mailer import _get_config as _get_mailer_config, refresh_mailer_config
 from backend.app.services import state_access
 
 router = APIRouter()
@@ -295,7 +295,7 @@ async def health_detailed(
 
 def _check_email_config() -> Dict[str, Any]:
     """Check email/SMTP configuration status."""
-    config = MAILER_CONFIG
+    config = _get_mailer_config()
     result: Dict[str, Any] = {
         "enabled": config.enabled,
         "host_configured": bool(config.host),
@@ -331,7 +331,7 @@ def _check_email_config() -> Dict[str, Any]:
 
 def _test_smtp_connection() -> Dict[str, Any]:
     """Attempt to connect to SMTP server (without sending email)."""
-    config = MAILER_CONFIG
+    config = _get_mailer_config()
     if not config.enabled or not config.host:
         return {"status": "skipped", "reason": "email_not_configured"}
 

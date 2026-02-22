@@ -19,6 +19,7 @@ class ScheduleCreatePayload(BaseModel):
     email_message: Optional[str] = None
     frequency: str = "daily"
     interval_minutes: Optional[int] = None
+    run_time: Optional[str] = None  # HH:MM (24h) — time of day to run
     name: Optional[str] = None
     active: bool = True
 
@@ -37,4 +38,5 @@ class ScheduleUpdatePayload(BaseModel):
     email_message: Optional[str] = None
     frequency: Optional[str] = None
     interval_minutes: Optional[int] = None
+    run_time: Optional[str] = None  # HH:MM (24h) — time of day to run
     active: Optional[bool] = None

@@ -53,40 +53,34 @@ import { useInteraction, InteractionType, Reversibility, useNavigateInteraction 
 import ConnectionSelector from '@/components/common/ConnectionSelector'
 import * as api from '@/api/client'
 import * as summaryApi from '@/api/summary'
-import { isTauri } from '@/utils/tauri'
+const isTauri = () => false
 import { neutral, palette } from '@/app/theme'
 import { fadeInUp, GlassCard, StyledFormControl } from '@/styles'
 
-/** Download a file by URL — works in both browser and Tauri webview. */
+/** Download a file by URL — fetch as blob and trigger browser save dialog. */
 function downloadFile(url, filename, toast) {
   const label = filename || 'file'
   if (toast) toast.show(`Downloading ${label}…`, 'info')
-  if (isTauri()) {
-    // Tauri: fetch as blob, create object URL, trigger download via hidden <a>
-    fetch(url)
-      .then((res) => {
-        if (!res.ok) throw new Error(`Download failed: ${res.status}`)
-        return res.blob()
-      })
-      .then((blob) => {
-        const blobUrl = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = blobUrl
-        a.download = filename || 'download'
-        document.body.appendChild(a)
-        a.click()
-        document.body.removeChild(a)
-        URL.revokeObjectURL(blobUrl)
-        if (toast) toast.show(`Downloaded ${label}`, 'success')
-      })
-      .catch((err) => {
-        console.error('[download]', err)
-        if (toast) toast.show(`Download failed: ${err.message}`, 'error')
-      })
-  } else {
-    // Browser: open in new tab (original behavior)
-    window.open(url, '_blank')
-  }
+  fetch(url)
+    .then((res) => {
+      if (!res.ok) throw new Error(`Download failed: ${res.status}`)
+      return res.blob()
+    })
+    .then((blob) => {
+      const blobUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = filename || 'download'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(blobUrl)
+      if (toast) toast.show(`Downloaded ${label}`, 'success')
+    })
+    .catch((err) => {
+      console.error('[download]', err)
+      if (toast) toast.show(`Download failed: ${err.message}`, 'error')
+    })
 }
 
 // =============================================================================
@@ -639,9 +633,13 @@ export default function ReportsPage() {
   const handleGenerateDocx = useCallback(async (runId) => {
     setGeneratingDocx(runId)
     try {
-      await api.generateDocx(runId)
-      toast.show('DOCX generated successfully', 'success')
-      fetchRunHistory() // refresh to show the new download button
+      const result = await api.generateDocxJob(runId)
+      if (result.status === 'already_exists') {
+        toast.show('DOCX already available', 'success')
+        fetchRunHistory()
+      } else {
+        toast.show('DOCX conversion queued — track progress in Report Progress', 'success')
+      }
     } catch (err) {
       console.error('DOCX generation failed:', err)
       toast.show('DOCX generation failed — check backend logs', 'error')

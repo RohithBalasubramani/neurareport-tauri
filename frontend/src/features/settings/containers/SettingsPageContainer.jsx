@@ -35,6 +35,13 @@ import LanguageIcon from '@mui/icons-material/Language'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import LockIcon from '@mui/icons-material/Lock'
 import PersonIcon from '@mui/icons-material/Person'
+import EmailIcon from '@mui/icons-material/Email'
+import VisibilityIcon from '@mui/icons-material/Visibility'
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
+import SendIcon from '@mui/icons-material/Send'
+import SaveIcon from '@mui/icons-material/Save'
+import InputAdornment from '@mui/material/InputAdornment'
+import IconButton from '@mui/material/IconButton'
 import { useToast } from '@/components/ToastProvider'
 import { useInteraction, InteractionType, Reversibility } from '@/components/ux/governance'
 import { useAppStore } from '@/stores'
@@ -190,6 +197,12 @@ export default function SettingsPage() {
   const [selectedLanguage, setSelectedLanguage] = useState('en')
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false)
   const [showTwoFactorSetup, setShowTwoFactorSetup] = useState(false)
+
+  // SMTP settings
+  const [smtp, setSmtp] = useState({ host: '', port: 587, username: '', password: '', sender: '', use_tls: true })
+  const [smtpLoading, setSmtpLoading] = useState(false)
+  const [smtpTesting, setSmtpTesting] = useState(false)
+  const [showSmtpPassword, setShowSmtpPassword] = useState(false)
 
   // Available options
   const TIMEZONE_OPTIONS = [
@@ -442,6 +455,62 @@ export default function SettingsPage() {
       },
     })
   }, [preferences, setDemoMode, toast, execute])
+
+  // SMTP handlers
+  const loadSmtpSettings = useCallback(async () => {
+    try {
+      const data = await api.getSmtpSettings()
+      if (data?.smtp) {
+        setSmtp(prev => ({
+          host: data.smtp.host || '',
+          port: data.smtp.port || 587,
+          username: data.smtp.username || '',
+          password: data.smtp.password || '',
+          sender: data.smtp.sender || '',
+          use_tls: data.smtp.use_tls !== false,
+        }))
+      }
+    } catch {
+      // silently fail on load
+    }
+  }, [])
+
+  const handleSmtpSave = useCallback(async () => {
+    setSmtpLoading(true)
+    try {
+      const result = await api.saveSmtpSettings(smtp)
+      toast.show(result?.message || 'SMTP settings saved', 'success')
+    } catch (err) {
+      toast.show(err.message || 'Failed to save SMTP settings', 'error')
+    } finally {
+      setSmtpLoading(false)
+    }
+  }, [smtp, toast])
+
+  const handleSmtpTest = useCallback(async () => {
+    setSmtpTesting(true)
+    try {
+      const result = await api.testSmtpConnection()
+      if (result?.status === 'connected') {
+        toast.show(result.message || 'SMTP connection successful', 'success')
+      } else {
+        toast.show(result?.message || 'SMTP connection failed', 'error')
+      }
+    } catch (err) {
+      toast.show(err.message || 'SMTP test failed', 'error')
+    } finally {
+      setSmtpTesting(false)
+    }
+  }, [toast])
+
+  const handleSmtpChange = useCallback((field) => (event) => {
+    const value = field === 'use_tls' ? event.target.checked
+      : field === 'port' ? parseInt(event.target.value, 10) || 587
+      : event.target.value
+    setSmtp(prev => ({ ...prev, [field]: value }))
+  }, [])
+
+  useEffect(() => { loadSmtpSettings() }, [loadSmtpSettings])
 
   const config = health?.checks?.configuration || {}
   const llm = health?.checks?.llm || health?.checks?.openai || {}
@@ -710,6 +779,96 @@ export default function SettingsPage() {
             {llm.model && (
               <ConfigRow label="Model" value={llm.model} />
             )}
+          </Stack>
+        </SettingCard>
+
+        {/* Email / SMTP Settings */}
+        <SettingCard icon={EmailIcon} title="Email / SMTP">
+          <Typography variant="body2" sx={{ color: theme.palette.text.secondary, mb: 2 }}>
+            Configure SMTP server for sending report emails. Settings are stored securely.
+          </Typography>
+          <Stack spacing={2}>
+            <Stack direction="row" spacing={2}>
+              <TextField
+                fullWidth
+                size="small"
+                label="SMTP Host"
+                placeholder="smtp.gmail.com"
+                value={smtp.host}
+                onChange={handleSmtpChange('host')}
+              />
+              <TextField
+                size="small"
+                label="Port"
+                type="number"
+                value={smtp.port}
+                onChange={handleSmtpChange('port')}
+                sx={{ width: 120, flexShrink: 0 }}
+              />
+            </Stack>
+            <TextField
+              fullWidth
+              size="small"
+              label="Sender Email"
+              placeholder="noreply@example.com"
+              value={smtp.sender}
+              onChange={handleSmtpChange('sender')}
+            />
+            <Stack direction="row" spacing={2}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Username"
+                placeholder="your-email@gmail.com"
+                value={smtp.username}
+                onChange={handleSmtpChange('username')}
+              />
+              <TextField
+                fullWidth
+                size="small"
+                label="Password"
+                type={showSmtpPassword ? 'text' : 'password'}
+                value={smtp.password}
+                onChange={handleSmtpChange('password')}
+                slotProps={{
+                  input: {
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <IconButton size="small" onClick={() => setShowSmtpPassword(p => !p)} edge="end">
+                          {showSmtpPassword ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}
+                        </IconButton>
+                      </InputAdornment>
+                    ),
+                  },
+                }}
+              />
+            </Stack>
+            <FormControlLabel
+              control={<Switch checked={smtp.use_tls} onChange={handleSmtpChange('use_tls')} size="small" />}
+              label={<Typography variant="body2" sx={{ color: theme.palette.text.primary }}>Use TLS encryption</Typography>}
+            />
+            <Stack direction="row" spacing={1.5}>
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={smtpLoading ? <CircularProgress size={16} /> : <SaveIcon />}
+                onClick={handleSmtpSave}
+                disabled={smtpLoading || !smtp.host}
+                sx={{ borderRadius: 1 }}
+              >
+                {smtpLoading ? 'Saving...' : 'Save'}
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={smtpTesting ? <CircularProgress size={16} /> : <SendIcon />}
+                onClick={handleSmtpTest}
+                disabled={smtpTesting || !smtp.host}
+                sx={{ borderRadius: 1 }}
+              >
+                {smtpTesting ? 'Testing...' : 'Test Connection'}
+              </Button>
+            </Stack>
           </Stack>
         </SettingCard>
 

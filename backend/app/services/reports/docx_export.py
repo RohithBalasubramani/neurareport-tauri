@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
 import re
 from io import BytesIO
 from pathlib import Path
@@ -553,9 +552,6 @@ def html_file_to_docx(
     return None
 
 
-_PDF2DOCX_TIMEOUT = int(os.environ.get("NEURA_PDF2DOCX_TIMEOUT", "120"))  # seconds
-
-
 def pdf_file_to_docx(
     pdf_path: Path,
     output_path: Path,
@@ -566,9 +562,6 @@ def pdf_file_to_docx(
     """
     Convert an already-rendered PDF into DOCX using pdf2docx for near-carbon-copy layout.
     Returns None when conversion is unavailable or fails so callers can fall back to HTML export.
-
-    Uses a timeout (default 120s) because pdf2docx can hang indefinitely on
-    complex Excel-based PDFs during its "[2/4] Analyzing document" phase.
     """
     if Converter is None:  # pragma: no cover
         logger.debug(
@@ -608,31 +601,8 @@ def pdf_file_to_docx(
         )
         return None
 
-    # Run the conversion in a separate thread with a timeout to prevent
-    # indefinite hangs on complex PDFs (pdf2docx can stall for 15+ min).
-    import concurrent.futures
-
-    def _do_convert():
-        converter.convert(str(output_path), start=start_page, end=end_page)
-
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(_do_convert)
-            fut.result(timeout=_PDF2DOCX_TIMEOUT)
-    except concurrent.futures.TimeoutError:
-        logger.warning(
-            "docx_pdf_convert_timeout",
-            extra={
-                "event": "docx_pdf_convert_timeout",
-                "pdf_path": str(pdf_path),
-                "timeout_seconds": _PDF2DOCX_TIMEOUT,
-            },
-        )
-        with contextlib.suppress(Exception):
-            converter.close()
-        with contextlib.suppress(FileNotFoundError):
-            output_path.unlink(missing_ok=True)
-        return None
+        converter.convert(str(output_path), start=start_page, end=end_page)
     except Exception as exc:  # pragma: no cover
         logger.warning(
             "docx_pdf_convert_failed",

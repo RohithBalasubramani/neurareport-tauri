@@ -23,6 +23,15 @@ from .ux_governance import UXGovernanceMiddleware, IntentHeaders
 
 logger = logging.getLogger("neura.api")
 
+# Paths whose request_start / request_complete logs are suppressed to avoid
+# bloating the desktop log file with high-frequency polling noise.
+_QUIET_PATHS: frozenset[str] = frozenset({
+    "/api/v1/health",
+    "/api/v1/health/ready",
+    "/health",
+    "/api/v1/jobs",
+})
+
 def _get_client_key(request: Request) -> str:
     """Get unique client identifier for rate limiting."""
     api_key = request.headers.get("x-api-key")
@@ -223,15 +232,19 @@ class CorrelationIdMiddleware:
         method = scope.get("method", "")
         started = time.monotonic()
 
-        logger.info(
-            "request_start",
-            extra={
-                "event": "request_start",
-                "path": path,
-                "method": method,
-                "correlation_id": correlation_id,
-            },
-        )
+        # Suppress verbose logging for high-frequency polling endpoints
+        _quiet = path.rstrip("/") in _QUIET_PATHS or path.rstrip("/").startswith(("/api/v1/jobs", "/api/v1/health"))
+
+        if not _quiet:
+            logger.info(
+                "request_start",
+                extra={
+                    "event": "request_start",
+                    "path": path,
+                    "method": method,
+                    "correlation_id": correlation_id,
+                },
+            )
 
         status_code = 0
 
@@ -267,17 +280,18 @@ class CorrelationIdMiddleware:
             raise
 
         elapsed = int((time.monotonic() - started) * 1000)
-        logger.info(
-            "request_complete",
-            extra={
-                "event": "request_complete",
-                "path": path,
-                "method": method,
-                "status": status_code,
-                "elapsed_ms": elapsed,
-                "correlation_id": correlation_id,
-            },
-        )
+        if not _quiet:
+            logger.info(
+                "request_complete",
+                extra={
+                    "event": "request_complete",
+                    "path": path,
+                    "method": method,
+                    "status": status_code,
+                    "elapsed_ms": elapsed,
+                    "correlation_id": correlation_id,
+                },
+            )
         set_correlation_id(None)
 
 

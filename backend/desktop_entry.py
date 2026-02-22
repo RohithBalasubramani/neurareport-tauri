@@ -283,7 +283,18 @@ def main():
 
     # Direct import avoids string-based lookup issues with PyInstaller
     from backend.api import app  # noqa: E402
+    import logging as _logging
     import uvicorn
+
+    # Suppress noisy uvicorn access-log lines for high-frequency polling
+    # endpoints (/api/v1/jobs, /health) that bloat the desktop log file.
+    class _QuietAccessFilter(_logging.Filter):
+        _NOISY = ("/api/v1/jobs", "/api/v1/health", "/health")
+        def filter(self, record: _logging.LogRecord) -> bool:
+            msg = record.getMessage()
+            return not any(p in msg for p in self._NOISY)
+
+    _logging.getLogger("uvicorn.access").addFilter(_QuietAccessFilter())
 
     uvicorn.run(
         app,

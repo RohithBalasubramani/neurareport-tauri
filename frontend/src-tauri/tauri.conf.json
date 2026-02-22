@@ -35,9 +35,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "neurareport-backend/**/*"
-    ],
+    "resources": {
+      "neurareport-backend": "./"
+    },
     "windows": {
       "nsis": {
         "installMode": "currentUser",

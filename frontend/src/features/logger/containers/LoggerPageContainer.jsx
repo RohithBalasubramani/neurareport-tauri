@@ -334,21 +334,21 @@ export default function LoggerPageContainer() {
                 <Box sx={{ mt: 3, display: 'flex', gap: 2 }}>
                   <Button
                     variant="outlined"
-                    onClick={() => window.location.href = '/neurareport/reports'}
+                    onClick={() => { const base = import.meta.env.VITE_ROUTER_BASENAME || ''; window.location.href = `${base}/reports` }}
                     size="small"
                   >
                     Go to Reports
                   </Button>
                   <Button
                     variant="outlined"
-                    onClick={() => window.location.href = '/neurareport/templates/create'}
+                    onClick={() => { const base = import.meta.env.VITE_ROUTER_BASENAME || ''; window.location.href = `${base}/templates/create` }}
                     size="small"
                   >
                     Create Template
                   </Button>
                   <Button
                     variant="outlined"
-                    onClick={() => window.location.href = '/neurareport/connections'}
+                    onClick={() => { const base = import.meta.env.VITE_ROUTER_BASENAME || ''; window.location.href = `${base}/connections` }}
                     size="small"
                   >
                     Manage Connections

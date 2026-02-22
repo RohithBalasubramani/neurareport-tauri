@@ -51,6 +51,10 @@ fn get_startup_error(state: tauri::State<'_, Mutex<BackendState>>) -> Option<Str
 }
 
 /// Find the backend executable inside the bundled resources folder.
+///
+/// The `tauri.conf.json` resources config `"neurareport-backend": "./"` copies
+/// the PyInstaller output directory's *contents* into the resource root, so
+/// the binary is at `<resource_dir>/neurareport-backend` (not in a subdirectory).
 fn find_backend_exe(app: &tauri::App) -> Result<std::path::PathBuf, String> {
     let resource_dir = app
         .path()
@@ -62,23 +66,21 @@ fn find_backend_exe(app: &tauri::App) -> Result<std::path::PathBuf, String> {
     #[cfg(not(target_os = "windows"))]
     let exe_name = "neurareport-backend";
 
-    let exe_path = resource_dir
-        .join("neurareport-backend")
-        .join(exe_name);
-
+    // Primary: resource root (matches resource map config)
+    let exe_path = resource_dir.join(exe_name);
     if exe_path.exists() {
         return Ok(exe_path);
     }
 
-    // Fallback: check directly in resource dir
-    let fallback = resource_dir.join(exe_name);
-    if fallback.exists() {
-        return Ok(fallback);
+    // Fallback: nested subdirectory (for alternative resource configs)
+    let nested = resource_dir.join("neurareport-backend").join(exe_name);
+    if nested.exists() {
+        return Ok(nested);
     }
 
     Err(format!(
         "Backend exe not found at {:?} or {:?}",
-        exe_path, fallback
+        exe_path, nested
     ))
 }
 

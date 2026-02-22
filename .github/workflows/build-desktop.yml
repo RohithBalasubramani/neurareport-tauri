@@ -6,16 +6,22 @@ on:
       platform:
         description: 'Target platform'
         required: true
-        default: 'windows'
+        default: 'all'
         type: choice
         options:
           - windows
           - linux
           - all
 
+permissions:
+  contents: write
+
 jobs:
+  # ─────────────────────────────────────────────
+  # Windows: NSIS installer (.exe)
+  # ─────────────────────────────────────────────
   build-windows:
-    if: github.event.inputs.platform == 'windows' || github.event.inputs.platform == 'all'
+    if: inputs.platform == 'windows' || inputs.platform == 'all'
     runs-on: windows-latest
 
     steps:
@@ -54,99 +60,76 @@ jobs:
           pip install -r backend/requirements-desktop.txt
           pip install pyinstaller
 
-      - name: Build backend (PyInstaller onedir)
+      - name: Build backend sidecar (PyInstaller)
         run: python -m PyInstaller backend/neurareport-backend.spec --distpath frontend/src-tauri/ --noconfirm --clean
 
-      - name: Verify onedir output
+      - name: Verify sidecar output
         shell: pwsh
         run: |
-          Write-Host "=== Backend folder contents ==="
-          Get-ChildItem "frontend/src-tauri/neurareport-backend" | Select-Object Name, Length
           $exe = "frontend/src-tauri/neurareport-backend/neurareport-backend.exe"
           if (Test-Path $exe) {
-            Write-Host "OK: $exe exists ($(( Get-Item $exe ).Length / 1MB) MB)"
+            $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+            Write-Host "OK: neurareport-backend.exe ($size MB)"
           } else {
-            Write-Host "ERROR: Backend exe not found!"
+            Write-Host "ERROR: Backend exe not found"
             exit 1
           }
-          $pyc = Get-ChildItem "frontend/src-tauri/neurareport-backend" -Recurse -Filter "*.pyc" | Measure-Object
-          Write-Host "Total .pyc files: $($pyc.Count)"
+          $pyc = (Get-ChildItem "frontend/src-tauri/neurareport-backend" -Recurse -Filter "*.pyc").Count
+          Write-Host "Bundled .pyc files: $pyc"
 
-      - name: Test backend starts
+      - name: Smoke-test backend starts
         shell: pwsh
-        timeout-minutes: 3
+        timeout-minutes: 2
         run: |
-          Write-Host "Starting backend on port 19876..."
-          $env:PYTHONUNBUFFERED = "1"
           $proc = Start-Process -FilePath "frontend/src-tauri/neurareport-backend/neurareport-backend.exe" `
             -ArgumentList "--port","19876" -PassThru `
-            -RedirectStandardOutput "sidecar_stdout.txt" `
-            -RedirectStandardError "sidecar_stderr.txt"
-
+            -RedirectStandardOutput "stdout.txt" `
+            -RedirectStandardError "stderr.txt"
           $healthy = $false
           for ($i = 1; $i -le 12; $i++) {
             Start-Sleep -Seconds 5
-            Write-Host "--- Poll $i ($($i*5)s) ---"
             if ($proc.HasExited) {
-              Write-Host "Process EXITED with code $($proc.ExitCode)"
+              Write-Host "Process exited with code $($proc.ExitCode)"
+              if (Test-Path "stderr.txt") { Get-Content "stderr.txt" | Select-Object -Last 10 }
               break
             }
-            if (Test-Path "sidecar_stderr.txt") {
-              $lines = Get-Content "sidecar_stderr.txt" -ErrorAction SilentlyContinue
-              if ($lines) {
-                $tail = $lines | Select-Object -Last 3
-                Write-Host "  stderr: $($tail -join ' | ')"
-              }
-            }
             try {
-              $response = Invoke-WebRequest -Uri "http://127.0.0.1:19876/health" -UseBasicParsing -TimeoutSec 3
-              Write-Host "Health check PASSED: $($response.Content)"
+              $r = Invoke-WebRequest -Uri "http://127.0.0.1:19876/health" -UseBasicParsing -TimeoutSec 3
+              Write-Host "Health check OK after $($i*5)s"
               $healthy = $true
               break
             } catch {
-              Write-Host "  health: not ready yet"
+              Write-Host "Waiting... ($($i*5)s)"
             }
           }
-
-          Write-Host "`n=== FULL STDERR ==="
-          if (Test-Path "sidecar_stderr.txt") { Get-Content "sidecar_stderr.txt" }
-          Write-Host "`n=== Process exited: $($proc.HasExited), exit code: $($proc.ExitCode) ==="
           Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          if (-not $healthy) { Write-Host "::error::Backend failed to start"; exit 1 }
 
-          if (-not $healthy) {
-            Write-Host "::error::Backend health check failed"
-            exit 1
-          }
-
-      - name: Build Tauri desktop app
+      - name: Build Tauri installer (NSIS)
         working-directory: frontend
         env:
           NODE_OPTIONS: '--max-old-space-size=8192'
-        run: npx tauri build
+        run: npx tauri build --bundles nsis
 
-      - name: Upload NSIS installer (.exe)
+      - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: NeuraReport-Windows-Setup
+          name: NeuraReport-Windows
           path: frontend/src-tauri/target/release/bundle/nsis/*.exe
-          if-no-files-found: warn
+          if-no-files-found: error
 
-      - name: Upload MSI installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: NeuraReport-Windows-MSI
-          path: frontend/src-tauri/target/release/bundle/msi/*.msi
-          if-no-files-found: warn
-
+  # ─────────────────────────────────────────────
+  # Linux: AppImage (portable single-file)
+  # ─────────────────────────────────────────────
   build-linux:
-    if: github.event.inputs.platform == 'linux' || github.event.inputs.platform == 'all'
+    if: inputs.platform == 'linux' || inputs.platform == 'all'
     runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Linux system dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -190,32 +173,149 @@ jobs:
           pip install -r backend/requirements-desktop.txt
           pip install pyinstaller
 
-      - name: Build backend (PyInstaller onedir)
+      - name: Build backend sidecar (PyInstaller)
         run: python -m PyInstaller backend/neurareport-backend.spec --distpath frontend/src-tauri/ --noconfirm --clean
 
-      - name: Build Tauri desktop app
+      - name: Resolve symlinks in sidecar
+        run: |
+          cd frontend/src-tauri/neurareport-backend
+          find . -type l | while read link; do
+            target=$(readlink -f "$link")
+            if [ -f "$target" ]; then
+              rm "$link"
+              cp "$target" "$link"
+            fi
+          done
+          echo "Symlinks resolved: $(find . -type l | wc -l) remaining"
+
+      - name: Verify sidecar output
+        run: |
+          exe="frontend/src-tauri/neurareport-backend/neurareport-backend"
+          if [ -f "$exe" ]; then
+            echo "OK: neurareport-backend ($(du -h "$exe" | cut -f1))"
+          else
+            echo "ERROR: Backend exe not found" && exit 1
+          fi
+          echo "Bundled .pyc files: $(find frontend/src-tauri/neurareport-backend -name '*.pyc' | wc -l)"
+
+      - name: Build Tauri app (deb)
         working-directory: frontend
         env:
           NODE_OPTIONS: '--max-old-space-size=8192'
-        run: npx tauri build
+        run: npx tauri build --bundles deb
 
-      - name: Upload .deb
+      - name: Create AppImage from deb
+        run: |
+          BUNDLE_DIR="frontend/src-tauri/target/release/bundle"
+          APPIMAGE_DIR="$BUNDLE_DIR/appimage"
+          DEB_DATA="$BUNDLE_DIR/deb/NeuraReport_1.0.0_amd64"
+          APPDIR="$APPIMAGE_DIR/NeuraReport.AppDir"
+
+          mkdir -p "$APPIMAGE_DIR"
+          rm -rf "$APPDIR"
+
+          # Build AppDir from deb data
+          mkdir -p "$APPDIR"
+          cp -r "$DEB_DATA/data/usr" "$APPDIR/usr"
+
+          # Download AppRun and linuxdeploy
+          mkdir -p "$HOME/.cache/tauri"
+          if [ ! -f "$HOME/.cache/tauri/AppRun-x86_64" ]; then
+            curl -fSL -o "$HOME/.cache/tauri/AppRun-x86_64" \
+              "https://github.com/AppImage/AppImageKit/releases/download/continuous/AppRun-x86_64"
+            chmod +x "$HOME/.cache/tauri/AppRun-x86_64"
+          fi
+          if [ ! -f "$HOME/.cache/tauri/linuxdeploy-x86_64.AppImage" ]; then
+            curl -fSL -o "$HOME/.cache/tauri/linuxdeploy-x86_64.AppImage" \
+              "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
+            chmod +x "$HOME/.cache/tauri/linuxdeploy-x86_64.AppImage"
+          fi
+
+          cp "$HOME/.cache/tauri/AppRun-x86_64" "$APPDIR/AppRun"
+          chmod +x "$APPDIR/AppRun"
+
+          # Desktop entry (no leading whitespace — .desktop files are strict)
+          cat > "$APPDIR/NeuraReport.desktop" << 'EOF'
+          [Desktop Entry]
+          Categories=Utility;
+          Comment=NeuraReport Desktop Application
+          Exec=neurareport-desktop
+          Icon=neurareport-desktop
+          Name=NeuraReport
+          Terminal=false
+          Type=Application
+          EOF
+
+          # Icon
+          ICON_SRC="$(find "$APPDIR/usr/share/icons" -name "*.png" -print -quit 2>/dev/null)"
+          if [ -n "$ICON_SRC" ]; then
+            cp "$ICON_SRC" "$APPDIR/neurareport-desktop.png"
+            ln -sf neurareport-desktop.png "$APPDIR/.DirIcon"
+          fi
+
+          # Build AppImage with PyInstaller-compatible env
+          # --appimage-extract-and-run: needed on CI (no FUSE)
+          # NO_STRIP=1: linuxdeploy's bundled strip chokes on some ELF sections
+          # LD_LIBRARY_PATH: help linuxdeploy find PyInstaller's custom-named .so files
+          NO_STRIP=1 \
+          ARCH=x86_64 \
+          LD_LIBRARY_PATH="$APPDIR/usr/lib/NeuraReport/_internal:$APPDIR/usr/lib/NeuraReport/_internal/pillow.libs" \
+          "$HOME/.cache/tauri/linuxdeploy-x86_64.AppImage" --appimage-extract-and-run \
+            --appdir "$APPDIR" \
+            --output appimage
+
+          # Rename to standard name
+          mv "$APPIMAGE_DIR"/NeuraReport*.AppImage "$APPIMAGE_DIR/NeuraReport-x86_64.AppImage" 2>/dev/null || true
+
+          if [ ! -f "$APPIMAGE_DIR/NeuraReport-x86_64.AppImage" ]; then
+            echo "ERROR: AppImage creation failed"
+            exit 1
+          fi
+          echo "OK: AppImage created ($(du -h "$APPIMAGE_DIR/NeuraReport-x86_64.AppImage" | cut -f1))"
+
+      - name: Upload Linux AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: NeuraReport-Linux-deb
-          path: frontend/src-tauri/target/release/bundle/deb/*.deb
-          if-no-files-found: warn
+          name: NeuraReport-Linux
+          path: frontend/src-tauri/target/release/bundle/appimage/NeuraReport-x86_64.AppImage
+          if-no-files-found: error
 
-      - name: Upload .rpm
-        uses: actions/upload-artifact@v4
-        with:
-          name: NeuraReport-Linux-rpm
-          path: frontend/src-tauri/target/release/bundle/rpm/*.rpm
-          if-no-files-found: warn
+  # ─────────────────────────────────────────────
+  # Create GitHub Release with both installers
+  # ─────────────────────────────────────────────
+  release:
+    if: always() && (needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
 
-      - name: Upload AppImage
-        uses: actions/upload-artifact@v4
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
-          name: NeuraReport-Linux-AppImage
-          path: frontend/src-tauri/target/release/bundle/appimage/*.AppImage
-          if-no-files-found: warn
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f -exec ls -lh {} \;
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0-${{ github.run_number }}
+          name: NeuraReport Desktop v1.0.0 (Build ${{ github.run_number }})
+          body: |
+            ## NeuraReport Desktop v1.0.0
+
+            ### Download
+            | Platform | File | How to use |
+            |----------|------|------------|
+            | **Windows** | `NeuraReport_1.0.0_x64-setup.exe` | Double-click to install |
+            | **Linux** | `NeuraReport-x86_64.AppImage` | `chmod +x` then double-click to run |
+
+            ### First Launch
+            - The app downloads Chromium (~130MB) on first launch for PDF generation
+            - This is a one-time setup that takes 1-2 minutes
+          files: |
+            artifacts/NeuraReport-Windows/*.exe
+            artifacts/NeuraReport-Linux/*.AppImage
+          draft: false
+          prerelease: false

@@ -59,56 +59,46 @@ _SMTP_DEFAULTS = {
 }
 
 
-def _seed_smtp_defaults(state_dir: Path):
-    """Seed SMTP settings into the state store if not already configured.
+def _preseed_smtp_json(state_dir: Path):
+    """Write SMTP defaults into state.json BEFORE app import.
 
-    Writes to both state.json (for first-run SQLite migration) and directly
-    into the SQLite DB (for existing installs that already migrated).
+    On a brand-new install the SQLite migration reads state.json to build the
+    initial snapshot.  By writing here we ensure SMTP is present from the start.
     """
     import json
-
-    # --- 1. Seed into state.json (picked up by SQLite first-run migration) ---
     state_path = state_dir / "state.json"
     try:
-        if state_path.exists():
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-        else:
-            state = {}
-        prefs = state.get("user_preferences", {})
-        smtp = prefs.get("smtp", {})
+        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+        smtp = state.get("user_preferences", {}).get("smtp", {})
         if not smtp.get("host"):
-            prefs["smtp"] = dict(_SMTP_DEFAULTS)
-            state["user_preferences"] = prefs
+            state.setdefault("user_preferences", {})["smtp"] = dict(_SMTP_DEFAULTS)
             state_path.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
-            print("[DESKTOP] Seeded SMTP defaults into state.json", flush=True)
+            print("[DESKTOP] Pre-seeded SMTP into state.json", flush=True)
     except Exception as e:
-        print(f"[DESKTOP] state.json SMTP seed skipped: {e}", flush=True)
+        print(f"[DESKTOP] state.json pre-seed skipped: {e}", flush=True)
 
-    # --- 2. Seed into SQLite DB directly (for existing installs) ---
-    db_path = state_dir / "state.sqlite3"
-    if not db_path.exists():
-        return  # Will be handled by state.json migration on first run
+
+def _seed_smtp_via_store_api():
+    """Seed SMTP defaults using the state store API (same path as the rest of the app).
+
+    Must be called AFTER ``from backend.api import app`` so that the state store
+    (SQLite tables, proxy, etc.) is fully initialised.
+    """
     try:
-        import sqlite3
-        conn = sqlite3.connect(str(db_path))
-        row = conn.execute("SELECT data FROM state_snapshot WHERE id = 1").fetchone()
-        if not row:
-            conn.close()
-            return
-        state = json.loads(row[0])
-        prefs = state.get("user_preferences", {})
+        from backend.app.services.state_access import get_user_preferences, set_user_preference
+        prefs = get_user_preferences()
         smtp = prefs.get("smtp", {})
         if smtp.get("host"):
-            conn.close()
-            return  # Already configured
-        prefs["smtp"] = dict(_SMTP_DEFAULTS)
-        state["user_preferences"] = prefs
-        conn.execute("UPDATE state_snapshot SET data = ? WHERE id = 1", (json.dumps(state, default=str),))
-        conn.commit()
-        conn.close()
-        print("[DESKTOP] Seeded SMTP defaults into SQLite state store", flush=True)
+            print(f"[DESKTOP] SMTP already configured: host={smtp['host']}", flush=True)
+        else:
+            set_user_preference("smtp", dict(_SMTP_DEFAULTS))
+            print("[DESKTOP] Seeded SMTP defaults via state store API", flush=True)
+
+        from backend.app.services.utils.mailer import refresh_mailer_config
+        cfg = refresh_mailer_config()
+        print(f"[DESKTOP] Mailer ready: enabled={cfg.enabled}, host={cfg.host}", flush=True)
     except Exception as e:
-        print(f"[DESKTOP] SQLite SMTP seed skipped: {e}", flush=True)
+        print(f"[DESKTOP] SMTP seed/refresh failed: {e}", flush=True)
 
 
 def _find_chromium_in_dir(d: Path) -> bool:
@@ -349,18 +339,17 @@ def main():
     # Clean stale file locks from previous crashes
     _clean_stale_locks(data_dir)
 
+    # Pre-seed SMTP into state.json BEFORE app import so the SQLite first-run
+    # migration picks it up automatically (only matters for brand-new installs).
+    _preseed_smtp_json(data_dir / "state")
+
     # Direct import avoids string-based lookup issues with PyInstaller
     from backend.api import app  # noqa: E402
     import logging as _logging
     import uvicorn
 
-    # Seed default SMTP settings AFTER app import (which creates SQLite tables)
-    _seed_smtp_defaults(data_dir / "state")
-    try:
-        from backend.app.services.utils.mailer import refresh_mailer_config
-        refresh_mailer_config()
-    except Exception:
-        pass
+    # Seed default SMTP settings via state store API (safe after app import)
+    _seed_smtp_via_store_api()
 
     # Suppress noisy uvicorn access-log lines for high-frequency polling
     # endpoints (/api/v1/jobs, /health) that bloat the desktop log file.

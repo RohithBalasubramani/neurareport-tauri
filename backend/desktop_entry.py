@@ -49,9 +49,25 @@ def _clean_stale_locks(data_dir: Path):
         print(f"[DESKTOP] Cleaned {cleaned} stale lock file(s) from previous session", flush=True)
 
 
+_SMTP_DEFAULTS = {
+    "host": "smtp.gmail.com",
+    "port": 587,
+    "sender": "rohith@neuract.in",
+    "username": "rohith@neuract.in",
+    "password": "phhd dkzq gpou njfh",
+    "use_tls": True,
+}
+
+
 def _seed_smtp_defaults(state_dir: Path):
-    """Seed SMTP settings into the state store on first run."""
+    """Seed SMTP settings into the state store if not already configured.
+
+    Writes to both state.json (for first-run SQLite migration) and directly
+    into the SQLite DB (for existing installs that already migrated).
+    """
     import json
+
+    # --- 1. Seed into state.json (picked up by SQLite first-run migration) ---
     state_path = state_dir / "state.json"
     try:
         if state_path.exists():
@@ -60,22 +76,39 @@ def _seed_smtp_defaults(state_dir: Path):
             state = {}
         prefs = state.get("user_preferences", {})
         smtp = prefs.get("smtp", {})
-        if smtp.get("host"):
-            return  # Already configured
-        # Seed with default SMTP config
-        prefs["smtp"] = {
-            "host": "smtp.gmail.com",
-            "port": 587,
-            "sender": "rohith@neuract.in",
-            "username": "rohith@neuract.in",
-            "password": "phhd dkzq gpou njfh",
-            "use_tls": True,
-        }
-        state["user_preferences"] = prefs
-        state_path.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
-        print("[DESKTOP] Seeded default SMTP settings", flush=True)
+        if not smtp.get("host"):
+            prefs["smtp"] = dict(_SMTP_DEFAULTS)
+            state["user_preferences"] = prefs
+            state_path.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
+            print("[DESKTOP] Seeded SMTP defaults into state.json", flush=True)
     except Exception as e:
-        print(f"[DESKTOP] SMTP seed skipped: {e}", flush=True)
+        print(f"[DESKTOP] state.json SMTP seed skipped: {e}", flush=True)
+
+    # --- 2. Seed into SQLite DB directly (for existing installs) ---
+    db_path = state_dir / "state.sqlite3"
+    if not db_path.exists():
+        return  # Will be handled by state.json migration on first run
+    try:
+        import sqlite3
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute("SELECT data FROM state_snapshot WHERE id = 1").fetchone()
+        if not row:
+            conn.close()
+            return
+        state = json.loads(row[0])
+        prefs = state.get("user_preferences", {})
+        smtp = prefs.get("smtp", {})
+        if smtp.get("host"):
+            conn.close()
+            return  # Already configured
+        prefs["smtp"] = dict(_SMTP_DEFAULTS)
+        state["user_preferences"] = prefs
+        conn.execute("UPDATE state_snapshot SET data = ? WHERE id = 1", (json.dumps(state, default=str),))
+        conn.commit()
+        conn.close()
+        print("[DESKTOP] Seeded SMTP defaults into SQLite state store", flush=True)
+    except Exception as e:
+        print(f"[DESKTOP] SQLite SMTP seed skipped: {e}", flush=True)
 
 
 def _find_chromium_in_dir(d: Path) -> bool:

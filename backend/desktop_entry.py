@@ -333,8 +333,16 @@ def main():
         f"sqlite+aiosqlite:///{data_dir / 'state' / 'neurareport.db'}",
     )
 
-    # Ensure Playwright Chromium is available for PDF generation
-    _ensure_playwright_chromium(data_dir)
+    # Download Playwright Chromium in a background thread so the server
+    # starts immediately and passes Tauri's health-check.  PDF generation
+    # will be unavailable until the download finishes (HTML/XLSX still work).
+    import threading
+    threading.Thread(
+        target=_ensure_playwright_chromium,
+        args=(data_dir,),
+        daemon=True,
+        name="playwright-install",
+    ).start()
 
     # Clean stale file locks from previous crashes
     _clean_stale_locks(data_dir)

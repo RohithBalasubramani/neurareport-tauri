@@ -343,9 +343,6 @@ def main():
         f"sqlite+aiosqlite:///{data_dir / 'state' / 'neurareport.db'}",
     )
 
-    # Seed default SMTP settings if not already configured
-    _seed_smtp_defaults(data_dir / "state")
-
     # Ensure Playwright Chromium is available for PDF generation
     _ensure_playwright_chromium(data_dir)
 
@@ -356,6 +353,14 @@ def main():
     from backend.api import app  # noqa: E402
     import logging as _logging
     import uvicorn
+
+    # Seed default SMTP settings AFTER app import (which creates SQLite tables)
+    _seed_smtp_defaults(data_dir / "state")
+    try:
+        from backend.app.services.utils.mailer import refresh_mailer_config
+        refresh_mailer_config()
+    except Exception:
+        pass
 
     # Suppress noisy uvicorn access-log lines for high-frequency polling
     # endpoints (/api/v1/jobs, /health) that bloat the desktop log file.

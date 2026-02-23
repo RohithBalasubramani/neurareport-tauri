@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import base64
 import logging
+import subprocess
+import sys
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -18,6 +20,17 @@ from .config import LLMConfig, LLMProvider
 from backend.app.utils.errors import AppError
 
 logger = logging.getLogger("neura.llm.providers")
+
+
+def _no_window_kwargs() -> dict:
+    """Return subprocess kwargs to suppress console windows on Windows."""
+    if sys.platform == "win32":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0  # SW_HIDE
+        return {"startupinfo": si, "creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
 
 # Patterns that may appear in exception messages containing secrets
 import re as _re
@@ -143,7 +156,6 @@ class ClaudeCodeCLIProvider(BaseProvider):
     def _check_cli_available(self) -> bool:
         """Check if claude CLI is available, searching common locations."""
         import shutil
-        import subprocess
 
         # Check PATH first, then common install locations
         claude_bin = shutil.which("claude")
@@ -168,6 +180,7 @@ class ClaudeCodeCLIProvider(BaseProvider):
                 capture_output=True,
                 text=True,
                 timeout=10,
+                **_no_window_kwargs(),
             )
             return result.returncode == 0
         except Exception:
@@ -254,7 +267,6 @@ class ClaudeCodeCLIProvider(BaseProvider):
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Execute a chat completion via Claude Code CLI."""
-        import subprocess
         import tempfile
 
         self.get_client()  # Verify CLI is available
@@ -318,6 +330,7 @@ class ClaudeCodeCLIProvider(BaseProvider):
                     text=True,
                     timeout=self.config.timeout_seconds,
                     env=env,
+                    **_no_window_kwargs(),
                 )
 
             # Clean up temp files

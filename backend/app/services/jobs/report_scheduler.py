@@ -150,7 +150,6 @@ class ReportScheduler:
         self._inflight: set[str] = set()
         self._scheduler = AsyncIOScheduler(
             executors={"default": AsyncIOExecutor()},
-            timezone=timezone.utc,
         )
 
     async def start(self) -> None:

@@ -303,6 +303,7 @@ const isValidEmail = (email) => {
   return emailRegex.test(email)
 }
 
+
 const isSchedulableTemplate = (template) => {
   if (!template || typeof template !== 'object') return false
   const status = String(template.status || '').toLowerCase()
@@ -542,7 +543,7 @@ function ScheduleDialog({
               onChange={handleChange('runTime')}
               InputLabelProps={{ shrink: true }}
               fullWidth
-              helperText="Time of day to run (leave blank for interval-based)"
+              helperText="Time of day in your local time (leave blank for interval-based)"
             />
           </Stack>
         </Stack>
@@ -957,7 +958,7 @@ export default function SchedulesPage() {
           const lastRun = value || row.last_run_at
           return (
             <Typography variant="body2" color={lastRun ? 'text.primary' : 'text.secondary'}>
-              {lastRun ? new Date(lastRun).toLocaleString() : 'Never'}
+              {lastRun ? new Date(lastRun).toLocaleString(undefined, { timeZoneName: 'short' }) : 'Never'}
             </Typography>
           )
         },
@@ -965,13 +966,13 @@ export default function SchedulesPage() {
       {
         field: 'next_run',
         headerName: 'Next Run',
-        width: 180,
+        width: 220,
         renderCell: (value, row) => {
           const active = row.active ?? row.enabled ?? true
           const nextRun = value || row.next_run_at
           return (
             <Typography variant="body2" color={active && nextRun ? 'text.primary' : 'text.secondary'}>
-              {active && nextRun ? new Date(nextRun).toLocaleString() : '-'}
+              {active && nextRun ? new Date(nextRun).toLocaleString(undefined, { timeZoneName: 'short' }) : '-'}
             </Typography>
           )
         },

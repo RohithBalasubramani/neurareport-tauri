@@ -98,8 +98,13 @@ def _build_cron_trigger(
     frequency: str, hour: int, minute: int,
     start_date: datetime | None, end_date: datetime | None,
 ) -> CronTrigger:
-    """Build a CronTrigger for the given frequency and time-of-day."""
-    kwargs: dict = {"hour": hour, "minute": minute, "timezone": timezone.utc}
+    """Build a CronTrigger for the given frequency and time-of-day.
+
+    run_time is stored in the user's local time, so we use the system's local
+    timezone (no explicit timezone kwarg) so the job fires at the expected
+    wall-clock time on the machine where the scheduler runs.
+    """
+    kwargs: dict = {"hour": hour, "minute": minute}
     if start_date:
         kwargs["start_date"] = start_date
     if end_date:

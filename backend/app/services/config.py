@@ -87,6 +87,22 @@ class Settings(BaseSettings):
     # Request timeout
     request_timeout_seconds: int = Field(default=300, validation_alias="NEURA_REQUEST_TIMEOUT_SECONDS")
 
+    # DataFrame store memory limits
+    dataframe_max_memory_mb: int = Field(default=2048, validation_alias="NEURA_DF_MAX_MEMORY_MB")
+    dataframe_row_limit: int = Field(default=500_000, validation_alias="NEURA_DF_ROW_LIMIT")
+
+    # LLM call resilience
+    llm_max_attempts: int = Field(default=3, validation_alias="NEURA_LLM_MAX_ATTEMPTS")
+    llm_retry_min_wait: float = Field(default=2.0, validation_alias="NEURA_LLM_MIN_WAIT")
+    llm_retry_max_wait: float = Field(default=30.0, validation_alias="NEURA_LLM_MAX_WAIT")
+
+    # PDF render timeout (milliseconds)
+    pdf_render_timeout_ms: int = Field(default=120_000, validation_alias="NEURA_PDF_RENDER_TIMEOUT_MS")
+
+    # Job timeouts (seconds)
+    job_default_timeout_seconds: int = Field(default=1800, validation_alias="NR_JOB_TIMEOUT_SECONDS")
+    event_stream_timeout_seconds: int = Field(default=1800, validation_alias="NR_EVENT_STREAM_TIMEOUT")
+
     # Idempotency configuration
     idempotency_enabled: bool = Field(default=True, validation_alias="NEURA_IDEMPOTENCY_ENABLED")
     idempotency_ttl_seconds: int = Field(default=86400, validation_alias="NEURA_IDEMPOTENCY_TTL_SECONDS")

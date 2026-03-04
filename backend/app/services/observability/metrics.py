@@ -27,30 +27,8 @@ try:
 except ImportError:
     HAS_OTEL = False
 
-try:
-    from prometheus_client import Counter, Gauge, Histogram, Info, REGISTRY
-    from prometheus_client.openmetrics.exposition import CONTENT_TYPE_LATEST, generate_latest
-    HAS_PROMETHEUS = True
-except ImportError:
-    # Desktop/PyInstaller build — prometheus_client not bundled.
-    # Provide no-op stubs so the module can be imported without crashing.
-    HAS_PROMETHEUS = False
-    REGISTRY = None
-    CONTENT_TYPE_LATEST = "text/plain"
-
-    class _NoOpMetric:
-        """Stub metric that silently ignores all operations."""
-        def __init__(self, *a, **kw): pass
-        def labels(self, **kw): return self
-        def inc(self, *a, **kw): pass
-        def dec(self, *a, **kw): pass
-        def observe(self, *a, **kw): pass
-        def info(self, *a, **kw): pass
-
-    Counter = Gauge = Histogram = Info = _NoOpMetric
-
-    def generate_latest(*a, **kw):
-        return b""
+from prometheus_client import Counter, Gauge, Histogram, Info, REGISTRY
+from prometheus_client.openmetrics.exposition import CONTENT_TYPE_LATEST, generate_latest
 
 logger = logging.getLogger("neura.observability.metrics")
 

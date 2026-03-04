@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import importlib
 import logging
-import pkgutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,17 +67,13 @@ class WidgetRegistry:
         self._discover_plugins()
 
     def _discover_plugins(self):
-        """Scan widgets package and import all plugins.
-
-        Uses pkgutil.iter_modules which works in both normal Python
-        and PyInstaller frozen bundles (where .py files don't exist on disk).
-        """
-        package = importlib.import_module("backend.app.services.widget_intelligence.widgets")
-        for importer, mod_name, _ispkg in pkgutil.iter_modules(package.__path__, package.__name__ + "."):
-            if mod_name.endswith(".base") or mod_name.endswith(".__init__"):
+        """Scan widgets directory and import all plugins."""
+        widgets_dir = Path(__file__).parent
+        for path in widgets_dir.glob("*.py"):
+            if path.name.startswith("_") or path.name == "base.py":
                 continue
             try:
-                module = importlib.import_module(mod_name)
+                module = importlib.import_module(f"backend.app.services.widget_intelligence.widgets.{path.stem}")
                 for attr_name in dir(module):
                     attr = getattr(module, attr_name)
                     if (isinstance(attr, type) and issubclass(attr, WidgetPlugin)
@@ -89,7 +84,7 @@ class WidgetRegistry:
                             self._variant_to_scenario[variant] = plugin.meta.scenario
                         logger.debug(f"[WidgetRegistry] Registered: {plugin.meta.scenario}")
             except Exception as e:
-                logger.warning(f"[WidgetRegistry] Failed to load {mod_name}: {e}")
+                logger.warning(f"[WidgetRegistry] Failed to load {path.name}: {e}")
 
         logger.info(f"[WidgetRegistry] {len(self._plugins)} widgets registered")
 

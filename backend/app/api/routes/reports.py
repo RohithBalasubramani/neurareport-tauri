@@ -53,6 +53,28 @@ def run_report(payload: RunPayload, request: Request):
                 status_code=404,
                 detail={"status": "error", "code": "connection_not_found", "message": f"Connection '{payload.connection_id}' not found."},
             )
+    # C1: Reject synchronous DOCX generation (use /runs/{id}/generate-docx instead)
+    if payload.docx:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "status": "error",
+                "code": "docx_not_supported_sync",
+                "message": "DOCX generation is not supported in synchronous mode. "
+                           "Generate the report first, then use POST /reports/runs/{run_id}/generate-docx "
+                           "or POST /reports/jobs/generate-docx/{run_id} for async conversion.",
+            },
+        )
+    # M4: Validate date range
+    if payload.start_date > payload.end_date:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "status": "error",
+                "code": "invalid_date_range",
+                "message": f"start_date ({payload.start_date}) must be <= end_date ({payload.end_date}).",
+            },
+        )
     try:
         return run_report_service(payload, request, kind=kind)
     except HTTPException:
@@ -77,7 +99,13 @@ async def enqueue_report_job(payload: RunPayload | list[RunPayload], request: Re
     payloads = payload if isinstance(payload, list) else [payload]
     kinds = set()
     for item in payloads:
-        rec = state_access.get_template_record(item.template_id) or {}
+        rec = state_access.get_template_record(item.template_id)
+        # C2: Validate template exists (don't silently default to {})
+        if not rec:
+            raise HTTPException(
+                status_code=404,
+                detail={"status": "error", "code": "template_not_found", "message": f"Template '{item.template_id}' not found."},
+            )
         kinds.add(str(rec.get("kind") or "pdf").strip().lower() or "pdf")
     if len(kinds) > 1:
         raise HTTPException(
@@ -90,6 +118,12 @@ async def enqueue_report_job(payload: RunPayload | list[RunPayload], request: Re
         )
     kind = next(iter(kinds)) if kinds else "pdf"
     return await queue_report_job(payload, request, kind=kind)
+
+
+@router.post("/jobs/generate-docx/{run_id}")
+async def enqueue_generate_docx_job(run_id: str, request: Request):
+    """Queue a background job to convert a run's PDF to DOCX."""
+    return await queue_generate_docx_job(run_id, request)
 
 
 # =============================================================================
@@ -149,18 +183,6 @@ def list_report_runs_route(
     return {"runs": runs, "correlation_id": _correlation(request)}
 
 
-@router.get("/runs/{run_id}")
-def get_report_run_route(run_id: str, request: Request):
-    """Get a specific report run by ID."""
-    run = get_report_run_service(run_id)
-    if not run:
-        raise HTTPException(
-            status_code=404,
-            detail={"status": "error", "code": "run_not_found", "message": "Run not found."}
-        )
-    return {"run": run, "correlation_id": _correlation(request)}
-
-
 @router.post("/runs/{run_id}/generate-docx")
 def generate_docx_route(run_id: str, request: Request):
     """Generate DOCX from an existing report run's PDF (on-demand, may take minutes)."""
@@ -173,7 +195,13 @@ def generate_docx_route(run_id: str, request: Request):
     return {"run": run, "correlation_id": _correlation(request)}
 
 
-@router.post("/jobs/generate-docx/{run_id}")
-async def enqueue_generate_docx_job(run_id: str, request: Request):
-    """Queue a background job to convert a run's PDF to DOCX."""
-    return await queue_generate_docx_job(run_id, request)
+@router.get("/runs/{run_id}")
+def get_report_run_route(run_id: str, request: Request):
+    """Get a specific report run by ID."""
+    run = get_report_run_service(run_id)
+    if not run:
+        raise HTTPException(
+            status_code=404,
+            detail={"status": "error", "code": "run_not_found", "message": "Run not found."}
+        )
+    return {"run": run, "correlation_id": _correlation(request)}

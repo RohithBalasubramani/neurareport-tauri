@@ -17,6 +17,11 @@ const useAgentStore = create((set, get) => ({
   executing: false,
   error: null,
 
+  // Team/Crew pipeline state
+  teamPipelines: {},
+  activeCrewType: null,
+  crewResults: [],
+
   // Actions
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
@@ -248,15 +253,59 @@ const useAgentStore = create((set, get) => ({
     }
   },
 
+  // Crew Pipeline
+  runCrewPipeline: async (crewType, params = {}) => {
+    set({ executing: true, error: null, activeCrewType: crewType });
+    try {
+      const task = await agentsV2Api.runReportAnalystAgent(null, {
+        crew_type: crewType,
+        ...params,
+      });
+      set((state) => ({
+        tasks: [task, ...state.tasks].slice(0, 200),
+        currentTask: task,
+        teamPipelines: {
+          ...state.teamPipelines,
+          [task.task_id || task.id]: { crewType, status: 'running', startedAt: new Date().toISOString() },
+        },
+        executing: false,
+      }));
+      return task;
+    } catch (err) {
+      set({ error: err.message, executing: false, activeCrewType: null });
+      return null;
+    }
+  },
+
+  streamCrewProgress: async (taskId, onEvent) => {
+    try {
+      return await agentsV2Api.streamTaskProgress(taskId, (event) => {
+        if (event.status === 'completed') {
+          set((state) => ({
+            crewResults: [{ taskId, ...event.result }, ...state.crewResults].slice(0, 200),
+            activeCrewType: null,
+          }));
+        }
+        if (onEvent) onEvent(event);
+      });
+    } catch (err) {
+      set({ error: err.message });
+      return null;
+    }
+  },
+
   // Reset
   reset: () => set({
     currentTask: null,
     error: null,
+    activeCrewType: null,
   }),
 
   clearTasks: () => set({
     tasks: [],
     currentTask: null,
+    crewResults: [],
+    teamPipelines: {},
   }),
 }));
 

@@ -469,7 +469,8 @@ def _run_report_internal(
     xlsx_requested = bool(p.xlsx)
     docx_landscape = kind == "excel"
     docx_enabled = docx_requested  # DOCX is always opt-in; use /generate-docx for on-demand conversion
-    xlsx_enabled = xlsx_requested or kind == "excel"
+    # M5: Respect explicit xlsx=false; only auto-enable for excel templates when not specified
+    xlsx_enabled = xlsx_requested if p.xlsx is not None else (kind == "excel")
     render_strategy = RENDER_STRATEGIES.resolve("excel" if docx_landscape or xlsx_enabled else "pdf")
     _ensure_not_cancelled()
 
@@ -714,6 +715,9 @@ def _run_report_internal(
     try:
         template_record = _state_store().get_template_record(p.template_id) or {}
         connection_record = _state_store().get_connection_record(p.connection_id) if p.connection_id else {}
+        from datetime import datetime, timezone
+        run_finished_iso = datetime.now(timezone.utc).isoformat()
+        run_started_iso = datetime.fromtimestamp(run_started, tz=timezone.utc).isoformat()
         _state_store().record_report_run(
             run_id,
             template_id=p.template_id,
@@ -735,6 +739,8 @@ def _run_report_internal(
             },
             schedule_id=p.schedule_id,
             schedule_name=p.schedule_name,
+            started_at=run_started_iso,
+            finished_at=run_finished_iso,
         )
     except Exception:
         logger.exception(

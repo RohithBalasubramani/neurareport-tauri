@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, AsyncIterable, Callable, Iterable, Optional
 
@@ -150,12 +151,27 @@ def run_event_stream(
     events: Iterable[dict],
     *,
     result_builder: Optional[Callable[[dict], dict]] = None,
+    timeout_seconds: int | None = None,
 ) -> None:
     if _is_cancelled(job_id):
         return
     state_store.record_job_start(job_id)
     completed = False
+    deadline = time.monotonic() + (timeout_seconds or _EVENT_STREAM_TIMEOUT)
+
     for event in events:
+        if time.monotonic() > deadline:
+            timeout_val = timeout_seconds or _EVENT_STREAM_TIMEOUT
+            logger.error("event_stream_timeout job_id=%s timeout=%ds", job_id, timeout_val)
+            state_store.record_job_completion(
+                job_id, status="failed",
+                error=f"Event stream exceeded timeout of {timeout_val}s",
+            )
+            close_fn = getattr(events, "close", None)
+            if callable(close_fn):
+                with contextlib.suppress(Exception):
+                    close_fn()
+            return
         if _is_cancelled(job_id):
             state_store.record_job_completion(job_id, status="cancelled", error="Cancelled by user")
             close_fn = getattr(events, "close", None)
@@ -208,6 +224,47 @@ async def run_event_stream_async(
 # Job types that involve heavy LLM calls and should be concurrency-limited.
 _LLM_JOB_TYPES = {"verify_template", "verify_excel", "mapping_approve"}
 
+# Per-job-type timeout defaults (seconds).
+# LLM jobs get shorter timeouts; report jobs need more time for rendering.
+_JOB_TIMEOUT_MAP = {
+    "verify_template": 600,
+    "verify_excel": 600,
+    "mapping_approve": 600,
+    "run_report": 1800,
+}
+_DEFAULT_JOB_TIMEOUT = int(os.getenv("NR_JOB_TIMEOUT_SECONDS", "1800"))
+
+# Event stream wall-clock timeout
+_EVENT_STREAM_TIMEOUT = int(os.getenv("NR_EVENT_STREAM_TIMEOUT", "1800"))
+
+
+def _run_with_heartbeat(runner: Callable, job_id: str) -> None:
+    """Execute *runner* while emitting periodic heartbeats for stale-job detection.
+
+    The existing recovery daemon (``find_stale_running_jobs``) checks
+    ``last_heartbeat_at`` to detect truly stuck jobs.  This function ensures
+    heartbeats are sent automatically for every background job.
+    """
+    heartbeat_interval = 30  # seconds
+    stop_event = threading.Event()
+
+    def _heartbeat_loop():
+        while not stop_event.wait(heartbeat_interval):
+            try:
+                state_store.update_job_heartbeat(job_id)
+            except Exception:
+                pass  # heartbeat is best-effort
+
+    hb_thread = threading.Thread(target=_heartbeat_loop, daemon=True, name=f"hb-{job_id[:8]}")
+    hb_thread.start()
+    try:
+        result = runner(job_id)
+        if asyncio.iscoroutine(result):
+            asyncio.run(result)
+    finally:
+        stop_event.set()
+        hb_thread.join(timeout=5)
+
 
 async def enqueue_background_job(
     *,
@@ -231,27 +288,48 @@ async def enqueue_background_job(
     )
 
     use_llm_semaphore = job_type in _LLM_JOB_TYPES
+    job_timeout = _JOB_TIMEOUT_MAP.get(job_type, _DEFAULT_JOB_TIMEOUT)
 
     async def _schedule() -> None:
         def _run() -> None:
+            import concurrent.futures
+
             acquired = False
+            job_id = job["id"]
             try:
                 if use_llm_semaphore:
                     logger.info(
                         "llm_semaphore_wait",
-                        extra={"event": "llm_semaphore_wait", "job_id": job["id"], "job_type": job_type},
+                        extra={"event": "llm_semaphore_wait", "job_id": job_id, "job_type": job_type},
                     )
-                    _LLM_SEMAPHORE.acquire()
+                    if not _LLM_SEMAPHORE.acquire(timeout=job_timeout):
+                        state_store.record_job_completion(
+                            job_id, status="failed",
+                            error=f"Timed out waiting for LLM semaphore ({job_timeout}s)",
+                        )
+                        return
                     acquired = True
-                result = runner(job["id"])
-                if asyncio.iscoroutine(result):
-                    asyncio.run(result)
+
+                # Run with heartbeat in a separate thread so we can enforce a timeout
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"job-{job_id[:8]}") as inner:
+                    future = inner.submit(_run_with_heartbeat, runner, job_id)
+                    try:
+                        future.result(timeout=job_timeout)
+                    except concurrent.futures.TimeoutError:
+                        logger.error(
+                            "job_timeout job_id=%s job_type=%s timeout=%ds",
+                            job_id, job_type, job_timeout,
+                        )
+                        state_store.record_job_completion(
+                            job_id, status="failed",
+                            error=f"Job exceeded timeout of {job_timeout}s",
+                        )
             except Exception as exc:
                 logger.exception(
                     "background_task_failed",
-                    extra={"event": "background_task_failed", "job_id": job.get("id"), "error": str(exc)},
+                    extra={"event": "background_task_failed", "job_id": job_id, "error": str(exc)},
                 )
-                state_store.record_job_completion(job["id"], status="failed", error="Background task failed")
+                state_store.record_job_completion(job_id, status="failed", error=str(exc)[:500])
             finally:
                 if acquired:
                     _LLM_SEMAPHORE.release()

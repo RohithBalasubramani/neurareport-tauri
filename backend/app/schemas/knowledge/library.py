@@ -8,7 +8,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class DocumentType(str, Enum):
@@ -32,9 +32,18 @@ class LibraryDocumentCreate(BaseModel):
     file_path: Optional[str] = None
     file_url: Optional[str] = None
     document_type: DocumentType = DocumentType.OTHER
+    category: Optional[str] = Field(default=None, exclude=True)
     tags: list[str] = Field(default_factory=list)
     collections: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_category_alias(cls, values):
+        """M10: Accept 'category' as an alias for 'document_type'."""
+        if isinstance(values, dict) and "category" in values and "document_type" not in values:
+            values["document_type"] = values.pop("category")
+        return values
 
 
 class LibraryDocumentUpdate(BaseModel):

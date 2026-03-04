@@ -63,15 +63,25 @@ class ProofreadingRequest(BaseModel):
 # AGENT ENDPOINTS
 # =============================================================================
 
+_AGENT_SLUG_MAP = {
+    "research": "research",
+    "data_analyst": "data-analysis",
+    "email_draft": "email-draft",
+    "content_repurpose": "content-repurpose",
+    "proofreading": "proofread",
+}
+
+
 @router.get("")
 async def list_agents():
     """List available agent types with their capabilities."""
     agent_types = []
     for at in AgentType:
+        slug = _AGENT_SLUG_MAP.get(at.value, at.value.replace("_", "-"))
         agent_types.append({
             "id": at.value,
             "name": at.value.replace("_", " ").title(),
-            "type": at.value,
+            "type": slug,
             "status": "available",
         })
     return {"agents": agent_types, "total": len(agent_types)}

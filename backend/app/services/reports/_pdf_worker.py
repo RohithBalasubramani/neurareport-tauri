@@ -20,8 +20,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
+
+# Configurable timeout for Playwright page operations (default: 2 minutes).
+# Prevents indefinite hangs when HTML references broken external resources.
+_PDF_RENDER_TIMEOUT_MS = int(os.environ.get("NEURA_PDF_RENDER_TIMEOUT_MS", "120000"))
 
 
 async def _convert(html_path: str, pdf_path: str, base_dir: str, pdf_scale: float | None = None) -> None:
@@ -40,7 +45,10 @@ async def _convert(html_path: str, pdf_path: str, base_dir: str, pdf_scale: floa
         context = await browser.new_context(base_url=base_url)
         try:
             page = await context.new_page()
-            await page.set_content(html_source, wait_until="networkidle")
+            page.set_default_timeout(_PDF_RENDER_TIMEOUT_MS)
+            # Use "load" instead of "networkidle" to avoid hanging on
+            # external resources. Local file:// content loads instantly.
+            await page.set_content(html_source, wait_until="load", timeout=_PDF_RENDER_TIMEOUT_MS)
             await page.emulate_media(media="print")
             await page.pdf(
                 path=pdf_path,

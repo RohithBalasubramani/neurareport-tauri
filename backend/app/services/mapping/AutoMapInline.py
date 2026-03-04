@@ -520,7 +520,11 @@ def run_llm_call_3(
                     "cache_key": cache_key,
                 },
             )
-            raise RuntimeError(f"LLM call failed for {prompt_version}") from exc
+            # Transport retries are handled by call_chat_completion.
+            # If we reach here, retries were exhausted.
+            raise RuntimeError(
+                f"LLM call failed for {prompt_version} after retries: {exc}"
+            ) from exc
 
         raw_text = (response.choices[0].message.content or "").strip()
         parsed_text = strip_code_fences(raw_text)

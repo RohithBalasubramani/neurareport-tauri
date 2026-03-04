@@ -1,10 +1,13 @@
-"""Observability module: OpenTelemetry tracing + Prometheus metrics."""
+"""Observability module: OpenTelemetry tracing + Prometheus metrics + cost tracking."""
 from __future__ import annotations
 
 import logging
 from typing import Any, Dict
 
 from fastapi import FastAPI
+
+from .cost_tracker import CostTracker, get_cost_tracker
+from .tracer import trace, SpanCollector, get_span_collector
 
 logger = logging.getLogger("neura.observability")
 

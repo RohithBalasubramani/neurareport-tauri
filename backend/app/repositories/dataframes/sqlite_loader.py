@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import sqlite3
@@ -10,12 +11,19 @@ from typing import Any, Mapping, Sequence
 import duckdb
 import pandas as pd
 
+logger = logging.getLogger("neura.dataframes.sqlite")
+
+# Maximum rows to load per table to avoid OOM on large datasets.
+# Matches the PostgresDataFrameLoader guard (postgres_loader.py).
+DEFAULT_ROW_LIMIT = 500_000
+
 
 class SQLiteDataFrameLoader:
     """Load SQLite tables into cached pandas DataFrames."""
 
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, row_limit: int = DEFAULT_ROW_LIMIT):
         self.db_path = Path(db_path)
+        self.row_limit = row_limit
         self._table_names: list[str] | None = None
         self._frames: dict[str, pd.DataFrame] = {}
         self._lock = threading.Lock()
@@ -71,11 +79,20 @@ class SQLiteDataFrameLoader:
 
     def _read_table(self, table_name: str) -> pd.DataFrame:
         quoted = table_name.replace('"', '""')
+        limit_clause = f" LIMIT {int(self.row_limit)}" if self.row_limit else ""
         try:
             with sqlite3.connect(str(self.db_path)) as con:
-                df = pd.read_sql_query(f'SELECT rowid AS "__rowid__", * FROM "{quoted}"', con)
+                df = pd.read_sql_query(
+                    f'SELECT rowid AS "__rowid__", * FROM "{quoted}"{limit_clause}', con
+                )
         except Exception as exc:  # pragma: no cover - surfaced to caller
             raise RuntimeError(f"Failed loading table {table_name!r} into DataFrame: {exc}") from exc
+        if self.row_limit and len(df) >= self.row_limit:
+            logger.warning(
+                "sqlite_table_row_limit_hit table=%s rows=%d limit=%d — "
+                "data may be truncated. Increase NEURA_DF_ROW_LIMIT to load more rows.",
+                table_name, len(df), self.row_limit,
+            )
         # DuckDB fails to register DataFrames with string dtypes; coerce to object.
         for col in df.columns:
             if pd.api.types.is_string_dtype(df[col].dtype):

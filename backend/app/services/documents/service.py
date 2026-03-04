@@ -104,6 +104,7 @@ class DocumentService:
         owner_id: Optional[str] = None,
         is_template: bool = False,
         metadata: Optional[dict] = None,
+        tags: Optional[list[str]] = None,
     ) -> Document:
         """Create a new document."""
         now = _utcnow().isoformat()
@@ -116,6 +117,7 @@ class DocumentService:
             owner_id=owner_id,
             is_template=is_template,
             metadata=metadata or {},
+            tags=tags or [],
         )
         with self._lock:
             self._save_document(doc)
@@ -143,6 +145,7 @@ class DocumentService:
         name: Optional[str] = None,
         content: Optional[DocumentContent] = None,
         metadata: Optional[dict] = None,
+        tags: Optional[list[str]] = None,
         create_version: bool = True,
     ) -> Optional[Document]:
         """Update an existing document."""
@@ -162,6 +165,8 @@ class DocumentService:
                 doc.content = DocumentContent(**self._normalize_content(content))
             if metadata is not None:
                 doc.metadata.update(metadata)
+            if tags is not None:
+                doc.tags = tags
 
             doc.updated_at = _utcnow().isoformat()
             doc.version += 1

@@ -168,21 +168,24 @@ async def get_dashboard_analytics() -> Dict[str, Any]:
             "status": _normalize_job_status(job.get("status")),
         })
 
+    summary = {
+        "totalConnections": len(connections),
+        "activeConnections": len(active_connections),
+        "totalTemplates": len(templates),
+        "approvedTemplates": len(approved_templates),
+        "pdfTemplates": len(pdf_templates),
+        "excelTemplates": len(excel_templates),
+        "totalJobs": total_jobs,
+        "totalReports": total_jobs,  # L1: alias for frontend compatibility
+        "activeJobs": len(running_jobs) + len(pending_jobs),
+        "completedJobs": len(completed_jobs),
+        "failedJobs": len(failed_jobs),
+        "totalSchedules": len(schedules),
+        "activeSchedules": len(active_schedules),
+    }
+
     return {
-        "summary": {
-            "totalConnections": len(connections),
-            "activeConnections": len(active_connections),
-            "totalTemplates": len(templates),
-            "approvedTemplates": len(approved_templates),
-            "pdfTemplates": len(pdf_templates),
-            "excelTemplates": len(excel_templates),
-            "totalJobs": total_jobs,
-            "activeJobs": len(running_jobs) + len(pending_jobs),
-            "completedJobs": len(completed_jobs),
-            "failedJobs": len(failed_jobs),
-            "totalSchedules": len(schedules),
-            "activeSchedules": len(active_schedules),
-        },
+        "summary": summary,
         "metrics": {
             "successRate": round(success_rate, 1),
             "avgConnectionLatency": round(avg_latency, 1),
@@ -192,6 +195,7 @@ async def get_dashboard_analytics() -> Dict[str, Any]:
         },
         "topTemplates": top_templates,
         "jobsTrend": jobs_trend,
+        "dailyStats": jobs_trend,  # L1: alias for frontend compatibility
         "recentActivity": recent_activity,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -423,6 +427,25 @@ async def clear_activity_log(
 # Favorites Endpoints
 # ------------------------------------------------------------------
 
+_FAVORITES_TYPE_MAP = {
+    "template": "templates", "templates": "templates",
+    "connection": "connections", "connections": "connections",
+    "dashboard": "dashboards", "dashboards": "dashboards",
+    "document": "documents", "documents": "documents",
+}
+
+
+def _normalize_fav_type(raw: str) -> str:
+    """Normalize entity type, accepting singular or plural forms."""
+    normalized = _FAVORITES_TYPE_MAP.get(raw.lower().strip())
+    if normalized is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid entity type '{raw}'. Must be one of: {', '.join(sorted(set(_FAVORITES_TYPE_MAP.values())))}",
+        )
+    return normalized
+
+
 @router.get("/favorites")
 async def get_favorites() -> Dict[str, Any]:
     """Get all favorites."""
@@ -463,9 +486,7 @@ async def get_favorites() -> Dict[str, Any]:
 @router.post("/favorites/{entity_type}/{entity_id}")
 async def add_favorite(entity_type: str, entity_id: str) -> Dict[str, Any]:
     """Add an item to favorites."""
-    if entity_type not in ("templates", "connections"):
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Invalid entity type")
+    entity_type = _normalize_fav_type(entity_type)
 
     added = state_access.add_favorite(entity_type, entity_id)
 
@@ -482,9 +503,7 @@ async def add_favorite(entity_type: str, entity_id: str) -> Dict[str, Any]:
 @router.delete("/favorites/{entity_type}/{entity_id}")
 async def remove_favorite(entity_type: str, entity_id: str) -> Dict[str, Any]:
     """Remove an item from favorites."""
-    if entity_type not in ("templates", "connections"):
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Invalid entity type")
+    entity_type = _normalize_fav_type(entity_type)
 
     removed = state_access.remove_favorite(entity_type, entity_id)
 
@@ -501,9 +520,7 @@ async def remove_favorite(entity_type: str, entity_id: str) -> Dict[str, Any]:
 @router.get("/favorites/{entity_type}/{entity_id}")
 async def check_favorite(entity_type: str, entity_id: str) -> Dict[str, Any]:
     """Check if an item is a favorite."""
-    if entity_type not in ("templates", "connections"):
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Invalid entity type")
+    entity_type = _normalize_fav_type(entity_type)
 
     is_fav = state_access.is_favorite(entity_type, entity_id)
     return {"isFavorite": is_fav, "entityType": entity_type, "entityId": entity_id}

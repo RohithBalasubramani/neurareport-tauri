@@ -83,6 +83,11 @@ def format_decimal_str(value: Any, max_decimals: int = 3) -> str:
             return str(value)
 
     if not decimal_value.is_finite():
+        logger.warning(
+            "format_decimal_non_finite value=%s coerced_to=0",
+            value,
+            extra={"event": "format_decimal_non_finite", "original": str(value)},
+        )
         return "0"
 
     if max_decimals <= 0:
@@ -106,6 +111,11 @@ def format_fixed_decimals(value: Any, decimals: int, max_decimals: int = 3) -> s
     except (InvalidOperation, ValueError, TypeError):
         return str(value)
     if not number.is_finite():
+        logger.warning(
+            "format_fixed_decimals_non_finite value=%s coerced_to=0",
+            value,
+            extra={"event": "format_fixed_decimals_non_finite", "original": str(value)},
+        )
         number = Decimal(0)
     quantizer = Decimal("1").scaleb(-decimals) if decimals else Decimal("1")
     rounded = number.quantize(quantizer, rounding=ROUND_HALF_UP)
@@ -400,11 +410,19 @@ class ContractAdapter:
     # ------------------------------------------------------------------ #
 
     def _resolve_mapping_column(self, token: str) -> Optional[Tuple[str, str]]:
-        """Return (table, column) from a token's mapping, or None if not a direct ref."""
+        """Return (table, column) from a token's mapping, or None if not a direct ref.
+
+        Mappings like ``params.report_date`` are treated as parameter
+        references (not real table.column lookups) and return ``None``.
+        """
         expr = self._mapping.get(token, "")
         m = _DIRECT_COLUMN_RE.match(expr)
         if m:
-            return m.group("table"), m.group("column")
+            table = m.group("table")
+            # params.xxx is a parameter reference, not a table.column
+            if table.lower() == "params":
+                return None
+            return table, m.group("column")
         return None
 
     def _apply_date_filter_df(self, df, table: str, start_date: str | None, end_date: str | None):
@@ -452,6 +470,28 @@ class ContractAdapter:
             mask = mask & series.isin(normalized)
         return df.loc[mask.fillna(False)]
 
+    @staticmethod
+    def _resolve_df_col(df, col: str) -> str | None:
+        """Resolve a column name against a DataFrame, stripping table prefix
+        and falling back to case-insensitive match if needed.
+
+        Returns the actual DataFrame column name, or None if not found.
+        """
+        # Exact match first
+        if col in df.columns:
+            return col
+        # Strip table prefix (e.g. "neuract__ANALYSER_TABLE.timestamp_utc" → "timestamp_utc")
+        if "." in col:
+            col = col.rsplit(".", 1)[1]
+            if col in df.columns:
+                return col
+        # Case-insensitive fallback
+        col_lower = col.lower()
+        for actual in df.columns:
+            if isinstance(actual, str) and actual.lower() == col_lower:
+                return actual
+        return None
+
     def _apply_declarative_op(self, df, op_spec) -> Any:
         """Interpret a declarative operation spec and return computed result.
 
@@ -490,23 +530,30 @@ class ContractAdapter:
             return num / den if den else None
         elif op == "sum":
             col = op_spec.get("column", "")
-            if col in df.columns:
-                return df[col].sum()
+            resolved = self._resolve_df_col(df, col)
+            if resolved:
+                return df[resolved].sum()
             return 0
         elif op == "mean":
             col = op_spec.get("column", "")
-            if col in df.columns:
-                return df[col].mean()
+            resolved = self._resolve_df_col(df, col)
+            if resolved:
+                return df[resolved].mean()
             return 0
         elif op == "count":
             col = op_spec.get("column", "")
-            if col in df.columns:
-                return df[col].count()
+            resolved = self._resolve_df_col(df, col)
+            if resolved:
+                return df[resolved].count()
             return len(df)
         elif op == "concat":
             cols = op_spec.get("columns", [])
             sep = op_spec.get("separator", " ")
-            parts = [df[c].astype(str) for c in cols if c in df.columns]
+            parts = []
+            for c in cols:
+                rc = self._resolve_df_col(df, c)
+                if rc:
+                    parts.append(df[rc].astype(str))
             if parts:
                 result = parts[0]
                 for p in parts[1:]:
@@ -516,16 +563,18 @@ class ContractAdapter:
         elif op == "format_date":
             col = op_spec.get("column", "")
             fmt = op_spec.get("format", "%Y-%m-%d")
-            if col in df.columns:
+            resolved = self._resolve_df_col(df, col)
+            if resolved:
                 from .discovery_excel import _coerce_datetime_series
-                dt_s = _coerce_datetime_series(df[col])
+                dt_s = _coerce_datetime_series(df[resolved])
                 return dt_s.dt.strftime(fmt).fillna("")
             return ""
         elif op == "format_number":
             col = op_spec.get("column", "")
             decimals = op_spec.get("decimals", 2)
-            if col in df.columns:
-                return df[col].round(decimals)
+            resolved = self._resolve_df_col(df, col)
+            if resolved:
+                return df[resolved].round(decimals)
             return 0
         else:
             logger.warning("unknown_declarative_op", extra={"op": op})
@@ -536,8 +585,9 @@ class ContractAdapter:
         if isinstance(spec, (int, float)):
             return spec
         if isinstance(spec, str):
-            if spec in df.columns:
-                return df[spec]
+            resolved = self._resolve_df_col(df, spec)
+            if resolved:
+                return df[resolved]
             return 0
         if isinstance(spec, dict):
             return self._apply_declarative_op(df, spec)
@@ -600,10 +650,18 @@ class ContractAdapter:
         header_tokens = _ensure_sequence(self._raw.get("header_tokens")) or self._scalar_tokens
 
         for token in header_tokens:
-            # Check if it's a PARAM
-            pm = _PARAM_RE.match(self._mapping.get(token, ""))
+            # Check if it's a PARAM (PARAM:xxx format)
+            mapping_expr = self._mapping.get(token, "")
+            pm = _PARAM_RE.match(mapping_expr)
             if pm:
                 param_name = pm.group(1)
+                result[token] = params.get(param_name, "")
+                continue
+
+            # Check params.xxx dot-notation format
+            dot_m = _DIRECT_COLUMN_RE.match(mapping_expr)
+            if dot_m and dot_m.group("table").lower() == "params":
+                param_name = dot_m.group("column")
                 result[token] = params.get(param_name, "")
                 continue
 
@@ -620,9 +678,21 @@ class ContractAdapter:
                 continue
 
             df = self._apply_date_filter_df(df, table, start_date, end_date)
-            if df.empty or column not in df.columns:
+            if df.empty:
                 result[token] = ""
                 continue
+            # Exact match first, then case-insensitive fallback
+            if column not in df.columns:
+                col_lower = column.lower()
+                matched = next(
+                    (c for c in df.columns if isinstance(c, str) and c.lower() == col_lower),
+                    None,
+                )
+                if matched:
+                    column = matched
+                else:
+                    result[token] = ""
+                    continue
 
             # Take first non-null value
             non_null = df[column].dropna()
@@ -705,6 +775,11 @@ class ContractAdapter:
                     except Exception:
                         pass
 
+            # 1b. Direct column match (MELT alias IS the token name)
+            if not resolved and tok in df.columns:
+                result_cols[tok] = df[tok].values
+                resolved = True
+
             # 2. Try direct mapping resolution (table.column)
             if not resolved:
                 ref = self._resolve_mapping_column(tok)
@@ -713,14 +788,24 @@ class ContractAdapter:
                     if col in df.columns:
                         result_cols[tok] = df[col].values
                         resolved = True
-                    elif melt_alias_set and short in df.columns:
-                        # After MELT, columns are named by alias
-                        result_cols[tok] = df[short].values
+                    elif melt_alias_set and (short in df.columns or tok in df.columns):
+                        # After MELT, columns are named by alias (full or stripped)
+                        col_to_use = short if short in df.columns else tok
+                        result_cols[tok] = df[col_to_use].values
                         resolved = True
+                    else:
+                        # Case-insensitive column fallback
+                        col_lower = col.lower()
+                        for actual_col in df.columns:
+                            if isinstance(actual_col, str) and actual_col.lower() == col_lower:
+                                result_cols[tok] = df[actual_col].values
+                                resolved = True
+                                break
 
-            # 3. Try MELT alias match by stripped name
-            if not resolved and melt_alias_set and short in df.columns:
-                result_cols[tok] = df[short].values
+            # 3. Try MELT alias match by stripped name or full token name
+            if not resolved and melt_alias_set and (short in df.columns or tok in df.columns):
+                col_to_use = short if short in df.columns else tok
+                result_cols[tok] = df[col_to_use].values
                 resolved = True
 
             # 4. Fallback
@@ -911,6 +996,10 @@ class ContractAdapter:
         for expr in self._mapping.values():
             for match in _PARAM_RE.findall(expr):
                 tokens.add(match)
+            # Also detect params.xxx dot-notation
+            m = _DIRECT_COLUMN_RE.match(str(expr).strip())
+            if m and m.group("table").lower() == "params":
+                tokens.add(m.group("column"))
         for expr in self._required_filters.values():
             tokens.update(_PARAM_RE.findall(expr))
         for expr in self._optional_filters.values():

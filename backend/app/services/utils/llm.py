@@ -285,6 +285,22 @@ class DictAsObject:
         return f"DictAsObject({self._data!r})"
 
 
+_LLM_MAX_ATTEMPTS = int(os.getenv("NEURA_LLM_MAX_ATTEMPTS", "3"))
+_LLM_MIN_WAIT = float(os.getenv("NEURA_LLM_MIN_WAIT", "2.0"))
+_LLM_MAX_WAIT = float(os.getenv("NEURA_LLM_MAX_WAIT", "30.0"))
+
+
+def _is_llm_retriable(exc: Exception) -> bool:
+    """Classify whether an LLM error is transient and worth retrying."""
+    from backend.app.services.connectors.resilience import is_transient_error
+
+    err_msg = str(exc).lower()
+    # Rate limit and capacity errors from LLM APIs are always retriable
+    if any(p in err_msg for p in ("rate limit", "429", "503", "overloaded", "capacity")):
+        return True
+    return is_transient_error(exc)
+
+
 def call_chat_completion(
     client: Any,
     *,
@@ -295,7 +311,10 @@ def call_chat_completion(
     **kwargs: Any,
 ) -> Any:
     """
-    Execute a chat completion using Claude Code CLI.
+    Execute a chat completion using Claude Code CLI with automatic retry.
+
+    Retries transient errors (rate limits, timeouts, 503s) with exponential
+    backoff and jitter. Permanent errors (auth, invalid config) raise immediately.
 
     Args:
         client: LLM client instance (or None to use the global client).
@@ -308,7 +327,9 @@ def call_chat_completion(
     Returns:
         Response object that supports both dict and attribute access.
     """
-    # Use the unified LLM client
+    import random as _random
+    import time as _time
+
     from backend.app.services.llm.client import get_llm_client, LLMClient
 
     if isinstance(client, LLMClient):
@@ -316,18 +337,38 @@ def call_chat_completion(
     else:
         llm_client = get_llm_client()
 
-    # Convert messages to list if needed
     messages_list = list(messages)
+    last_exc: Optional[Exception] = None
 
-    response = llm_client.complete(
-        messages=messages_list,
-        model=model,
-        description=description,
-        **kwargs,
-    )
+    for attempt in range(1, _LLM_MAX_ATTEMPTS + 1):
+        try:
+            response = llm_client.complete(
+                messages=messages_list,
+                model=model,
+                description=description,
+                **kwargs,
+            )
+            return DictAsObject(response) if isinstance(response, dict) else response
+        except Exception as exc:
+            last_exc = exc
 
-    # Wrap dict response to support both dict and attribute access
-    return DictAsObject(response) if isinstance(response, dict) else response
+            if attempt >= _LLM_MAX_ATTEMPTS or not _is_llm_retriable(exc):
+                logger.error(
+                    "llm_call_failed attempt=%d/%d description=%s error=%s",
+                    attempt, _LLM_MAX_ATTEMPTS, description, exc,
+                )
+                raise
+
+            wait = min(_LLM_MAX_WAIT, _LLM_MIN_WAIT * (2 ** (attempt - 1)))
+            wait *= 1 + _random.uniform(0, 0.5)  # jitter
+            logger.warning(
+                "llm_call_retry attempt=%d/%d description=%s wait=%.1fs error=%s",
+                attempt, _LLM_MAX_ATTEMPTS, description, wait, exc,
+            )
+            _time.sleep(wait)
+
+    # Unreachable, but satisfies type checker
+    raise last_exc  # type: ignore[misc]
 
 
 async def call_chat_completion_async(

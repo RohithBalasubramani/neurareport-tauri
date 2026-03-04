@@ -19,6 +19,15 @@ from .contract_adapter import ContractAdapter
 
 logger = logging.getLogger(__name__)
 
+
+class DataPipelineError(RuntimeError):
+    """Raised when the data pipeline cannot produce valid results.
+
+    This replaces the previous silent-failure pattern where exceptions
+    were caught and empty data was returned, causing blank reports.
+    """
+    pass
+
 _CF_PREFIX = "__cf_"
 
 
@@ -133,24 +142,34 @@ class DataFramePipeline:
                 start_date=self.start_date,
                 end_date=self.end_date,
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("df_pipeline_header_failed")
-            return {}
+            raise DataPipelineError(f"Header resolution failed: {exc}") from exc
 
     def _resolve_rows(self):
         import pandas as pd
 
         try:
-            return self.adapter.resolve_row_data(
+            result = self.adapter.resolve_row_data(
                 self.loader,
                 self.params,
                 start_date=self.start_date,
                 end_date=self.end_date,
                 value_filters=self.value_filters,
             )
-        except Exception:
+            if result is None or (isinstance(result, pd.DataFrame) and result.empty):
+                logger.warning(
+                    "df_pipeline_rows_empty — query returned no data",
+                    extra={
+                        "event": "df_pipeline_rows_empty",
+                        "start_date": self.start_date,
+                        "end_date": self.end_date,
+                    },
+                )
+            return result
+        except Exception as exc:
             logger.exception("df_pipeline_rows_failed")
-            return pd.DataFrame()
+            raise DataPipelineError(f"Row resolution failed: {exc}") from exc
 
     def _resolve_totals(self, rows_df) -> Dict[str, Any]:
         import pandas as pd
@@ -159,6 +178,12 @@ class DataFramePipeline:
             return {}
         try:
             return self.adapter.resolve_totals_data(rows_df)
-        except Exception:
-            logger.exception("df_pipeline_totals_failed")
+        except Exception as exc:
+            # Totals failure is non-fatal: a report with rows but no totals
+            # is still useful, whereas a report with no rows is not.
+            logger.warning(
+                "df_pipeline_totals_failed_degraded error=%s",
+                exc,
+                extra={"event": "df_pipeline_totals_failed_degraded", "error": str(exc)},
+            )
             return {}

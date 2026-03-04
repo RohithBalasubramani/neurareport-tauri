@@ -185,6 +185,7 @@ async def create_document(
         content=content_payload,
         is_template=req.is_template,
         metadata=req.metadata,
+        tags=req.tags,
     )
     return DocumentResponse(**doc.model_dump())
 
@@ -231,6 +232,54 @@ async def list_documents(
         offset=offset,
         limit=limit,
     )
+
+
+class DocumentSearchRequest(BaseModel):
+    """M9: Request body for document search."""
+    q: str
+    tags: Optional[list[str]] = None
+    is_template: Optional[bool] = None
+    limit: int = 50
+    offset: int = 0
+
+
+@router.post("/search")
+async def search_documents(
+    req: DocumentSearchRequest,
+    doc_service: DocumentService = Depends(get_document_service),
+):
+    """Search documents by text query with optional tag/template filters."""
+    documents, _ = doc_service.list_documents(
+        is_template=req.is_template,
+        tags=req.tags,
+        limit=500,
+        offset=0,
+    )
+    q_lower = req.q.strip().lower()
+
+    def _doc_matches(d) -> bool:
+        if q_lower in (d.name or "").lower():
+            return True
+        content = d.content
+        if content:
+            if hasattr(content, "model_dump"):
+                content = content.model_dump()
+            if isinstance(content, dict):
+                for node in content.get("content", []):
+                    for inline in node.get("content", []):
+                        if q_lower in (inline.get("text") or "").lower():
+                            return True
+        return False
+
+    matched = [d for d in documents if _doc_matches(d)]
+    total = len(matched)
+    paged = matched[req.offset:req.offset + req.limit]
+    return {
+        "results": [DocumentResponse(**d.model_dump()).model_dump() for d in paged],
+        "total": total,
+        "limit": req.limit,
+        "offset": req.offset,
+    }
 
 
 # ============================================
@@ -322,6 +371,7 @@ async def update_document(
         name=req.name,
         content=content_payload,
         metadata=req.metadata,
+        tags=req.tags,
     )
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")

@@ -24,6 +24,14 @@ from .postgres_loader import PostgresDataFrameLoader, get_postgres_loader
 logger = logging.getLogger("neura.dataframes.store")
 
 
+_DEFAULT_MAX_MEMORY_BYTES = int(os.getenv("NEURA_DF_MAX_MEMORY_BYTES", str(2 * 1024**3)))  # 2 GB
+
+
+def _frames_memory_bytes(frames: Dict[str, pd.DataFrame]) -> int:
+    """Compute total memory usage of a dict of DataFrames."""
+    return sum(df.memory_usage(deep=True).sum() for df in frames.values()) if frames else 0
+
+
 class DataFrameStore:
     """
     Centralized store for managing DataFrames by connection.
@@ -32,6 +40,7 @@ class DataFrameStore:
     - Tables are loaded once as DataFrames and cached
     - All queries run against in-memory DataFrames via DuckDB
     - No direct database connections after initial load
+    - Total memory usage is bounded by a configurable limit
     """
 
     _instance: Optional["DataFrameStore"] = None
@@ -55,8 +64,13 @@ class DataFrameStore:
         self._db_types: Dict[str, str] = {}
         self._query_engines: Dict[str, DuckDBDataFrameQuery] = {}
         self._store_lock = threading.Lock()
+        self._total_memory_bytes: int = 0
+        self._max_memory_bytes: int = _DEFAULT_MAX_MEMORY_BYTES
         self._initialized = True
-        logger.info("DataFrameStore initialized")
+        logger.info(
+            "DataFrameStore initialized (max_memory=%dMB)",
+            self._max_memory_bytes // (1024**2),
+        )
 
     def register_connection(
         self,
@@ -101,6 +115,26 @@ class DataFrameStore:
             eager = eager_load_enabled()
             frames = loader.frames() if eager else {}
 
+            # Enforce memory limit before caching
+            new_memory = _frames_memory_bytes(frames)
+            # Subtract memory of frames being replaced (if re-registering)
+            old_frames = self._frames_cache.get(connection_id, {})
+            old_memory = _frames_memory_bytes(old_frames)
+            projected = self._total_memory_bytes - old_memory + new_memory
+            if projected > self._max_memory_bytes:
+                logger.error(
+                    "dataframe_store_memory_limit connection_id=%s "
+                    "new_bytes=%d total_projected=%d max=%d",
+                    connection_id, new_memory, projected, self._max_memory_bytes,
+                )
+                raise MemoryError(
+                    f"DataFrameStore would exceed {self._max_memory_bytes // (1024**2)}MB limit "
+                    f"loading connection {connection_id} "
+                    f"({new_memory // (1024**2)}MB new, "
+                    f"{self._total_memory_bytes // (1024**2)}MB current). "
+                    f"Set NEURA_DF_MAX_MEMORY_BYTES to increase the limit."
+                )
+
             # Close existing query engine if any
             existing_engine = self._query_engines.get(connection_id)
             if existing_engine:
@@ -108,6 +142,9 @@ class DataFrameStore:
                     existing_engine.close()
                 except Exception:
                     pass
+
+            # Update memory accounting
+            self._total_memory_bytes = self._total_memory_bytes - old_memory + new_memory
 
             # Store everything
             self._loaders[connection_id] = loader
@@ -120,8 +157,13 @@ class DataFrameStore:
             self._query_engines[connection_id] = DuckDBDataFrameQuery(frames, loader=loader)
 
             logger.info(
-                f"Loaded {len(frames)} tables for connection {connection_id}: {list(frames.keys())}"
-                if frames else f"Registered connection {connection_id} for lazy DataFrame loading"
+                "Loaded %d tables for connection %s (%dMB, total store: %dMB/%dMB): %s"
+                if frames else "Registered connection %s for lazy DataFrame loading",
+                len(frames), connection_id,
+                new_memory // (1024**2),
+                self._total_memory_bytes // (1024**2),
+                self._max_memory_bytes // (1024**2),
+                list(frames.keys()) if frames else [],
             )
 
     def get_loader(self, connection_id: str) -> Optional[SQLiteDataFrameLoader]:
@@ -202,6 +244,11 @@ class DataFrameStore:
         Call this when the underlying database changes.
         """
         with self._store_lock:
+            # Subtract memory before clearing
+            old_frames = self._frames_cache.get(connection_id, {})
+            old_memory = _frames_memory_bytes(old_frames)
+            self._total_memory_bytes = max(0, self._total_memory_bytes - old_memory)
+
             engine = self._query_engines.pop(connection_id, None)
             if engine:
                 try:
@@ -213,7 +260,10 @@ class DataFrameStore:
             self._db_paths.pop(connection_id, None)
             self._connection_urls.pop(connection_id, None)
             self._db_types.pop(connection_id, None)
-            logger.info(f"Invalidated DataFrames for connection {connection_id}")
+            logger.info(
+                "Invalidated DataFrames for connection %s (freed %dMB, total: %dMB)",
+                connection_id, old_memory // (1024**2), self._total_memory_bytes // (1024**2),
+            )
 
     def is_registered(self, connection_id: str) -> bool:
         """Check if a connection is registered."""
@@ -235,6 +285,12 @@ class DataFrameStore:
                     conn_id: len(frames)
                     for conn_id, frames in self._frames_cache.items()
                 },
+                "total_memory_bytes": self._total_memory_bytes,
+                "total_memory_mb": round(self._total_memory_bytes / (1024**2), 1),
+                "max_memory_mb": round(self._max_memory_bytes / (1024**2), 1),
+                "memory_utilization_pct": round(
+                    (self._total_memory_bytes / self._max_memory_bytes) * 100, 1
+                ) if self._max_memory_bytes else 0,
             }
 
     def clear(self) -> None:
@@ -251,6 +307,7 @@ class DataFrameStore:
             self._connection_urls.clear()
             self._db_types.clear()
             self._query_engines.clear()
+            self._total_memory_bytes = 0
             logger.info("DataFrameStore cleared")
 
 

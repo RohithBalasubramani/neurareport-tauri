@@ -8,7 +8,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class NodeType(str, Enum):
@@ -73,7 +73,7 @@ class WorkflowTrigger(BaseModel):
 
 class CreateWorkflowRequest(BaseModel):
     """Request to create a workflow."""
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "allow"}
 
     name: str
     description: Optional[str] = None
@@ -81,6 +81,14 @@ class CreateWorkflowRequest(BaseModel):
     edges: list[WorkflowEdge] = Field(default_factory=list)
     triggers: list[WorkflowTrigger] = Field(default_factory=list)
     is_active: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_steps_alias(cls, values):
+        """M13: Accept 'steps' as an alias for 'nodes'."""
+        if isinstance(values, dict) and "steps" in values and "nodes" not in values:
+            values["nodes"] = values.pop("steps")
+        return values
 
 
 class UpdateWorkflowRequest(BaseModel):

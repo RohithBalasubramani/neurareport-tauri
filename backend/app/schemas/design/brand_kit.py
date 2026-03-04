@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 import re
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 _HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
@@ -52,6 +52,24 @@ class BrandKitCreate(BaseModel):
     colors: list[BrandColor] = Field(default_factory=list)
     typography: Typography = Field(default_factory=Typography)
 
+    model_config = {"extra": "allow"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_top_level_font_family(cls, values):
+        """Accept font_family at top level and merge into typography."""
+        if isinstance(values, dict) and "font_family" in values and "typography" not in values:
+            typo = values.pop("typography", {}) if "typography" in values else {}
+            typo["font_family"] = values.pop("font_family")
+            values["typography"] = typo
+        elif isinstance(values, dict) and "font_family" in values:
+            typo = values.get("typography", {})
+            if isinstance(typo, dict):
+                typo.setdefault("font_family", values.pop("font_family"))
+            else:
+                values.pop("font_family")
+        return values
+
     @field_validator("primary_color", "secondary_color", "accent_color", "text_color", "background_color")
     @classmethod
     def validate_hex_color(cls, v: str) -> str:
@@ -72,6 +90,21 @@ class BrandKitUpdate(BaseModel):
     background_color: Optional[str] = None
     colors: Optional[list[BrandColor]] = None
     typography: Optional[Typography] = None
+
+    model_config = {"extra": "allow"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_top_level_font_family(cls, values):
+        """Accept font_family at top level and merge into typography."""
+        if isinstance(values, dict) and "font_family" in values:
+            typo = values.get("typography", {}) or {}
+            if isinstance(typo, dict):
+                typo.setdefault("font_family", values.pop("font_family"))
+                values["typography"] = typo
+            else:
+                values.pop("font_family")
+        return values
 
     @field_validator("primary_color", "secondary_color", "accent_color", "text_color", "background_color")
     @classmethod

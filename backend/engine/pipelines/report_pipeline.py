@@ -28,15 +28,11 @@ from backend.engine.adapters.rendering import (
     XLSXRenderer,
     RenderContext,
 )
+from prefect import flow, task
 try:
-    from prefect import flow, task
-    try:
-        from prefect.task_runners import SequentialTaskRunner
-    except ImportError:
-        SequentialTaskRunner = None
+    from prefect.task_runners import SequentialTaskRunner
 except ImportError:
-    # Desktop/PyInstaller build — prefect not bundled
-    flow = task = lambda f=None, **kw: f if f else (lambda fn: fn)
+    # Prefect 3.x removed SequentialTaskRunner - use default synchronous execution
     SequentialTaskRunner = None
 from .base import Pipeline, PipelineContext, Step, StepResult
 

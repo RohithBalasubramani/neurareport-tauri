@@ -96,6 +96,10 @@ def get_report_run(run_id: str) -> dict | None:
     return _call("get_report_run", run_id)
 
 
+def list_saved_charts(template_id: str) -> list[dict]:
+    return _call("list_saved_charts", template_id)
+
+
 def get_activity_log(*args: Any, **kwargs: Any) -> list[dict]:
     return _call("get_activity_log", *args, **kwargs)
 
@@ -248,6 +252,7 @@ __all__ = [
     "record_schedule_run",
     "list_report_runs",
     "get_report_run",
+    "list_saved_charts",
     "get_activity_log",
     "log_activity",
     "clear_activity_log",

@@ -39,7 +39,12 @@ async def run_report_job(payload: RunPayload | list[RunPayload], request: Reques
     payloads = payload if isinstance(payload, list) else [payload]
     kinds = set()
     for item in payloads:
-        rec = state_access.get_template_record(item.template_id) or {}
+        rec = state_access.get_template_record(item.template_id)
+        if not rec:
+            raise HTTPException(
+                status_code=404,
+                detail={"status": "error", "code": "template_not_found", "message": f"Template '{item.template_id}' not found."},
+            )
         kinds.add(str(rec.get("kind") or "pdf").strip().lower() or "pdf")
     if len(kinds) > 1:
         raise HTTPException(

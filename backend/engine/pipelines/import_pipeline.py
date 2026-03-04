@@ -19,15 +19,11 @@ from typing import Any, Dict, List, Optional
 from backend.engine.core.errors import ValidationError
 from backend.engine.domain.templates import Template, TemplateKind, TemplateStatus, Artifact
 from backend.engine.adapters.extraction import PDFExtractor, ExcelExtractor
+from prefect import flow, task
 try:
-    from prefect import flow, task
-    try:
-        from prefect.task_runners import SequentialTaskRunner
-    except ImportError:
-        SequentialTaskRunner = None
+    from prefect.task_runners import SequentialTaskRunner
 except ImportError:
-    # Desktop/PyInstaller build — prefect not bundled
-    flow = task = lambda f=None, **kw: f if f else (lambda fn: fn)
+    # Prefect 3.x removed SequentialTaskRunner - use default synchronous execution
     SequentialTaskRunner = None
 from .base import Pipeline, PipelineContext, Step
 

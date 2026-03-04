@@ -24,7 +24,7 @@ from .ux_governance import UXGovernanceMiddleware, IntentHeaders
 logger = logging.getLogger("neura.api")
 
 # Paths whose request_start / request_complete logs are suppressed to avoid
-# bloating the desktop log file with high-frequency polling noise.
+# bloating the log file with high-frequency polling noise.
 _QUIET_PATHS: frozenset[str] = frozenset({
     "/api/v1/health",
     "/api/v1/health/ready",
@@ -405,7 +405,7 @@ def add_middlewares(app: FastAPI, settings: Settings) -> None:
         # Note: allow_credentials=True is incompatible with allow_origins=["*"]
         app.add_middleware(
             CORSMiddleware,
-            allow_origin_regex=r"(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost|https?://tauri\.localhost)",
+            allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
             allow_methods=cors_methods,
             allow_headers=cors_headers,
             allow_credentials=True,

@@ -30,6 +30,7 @@ from .routes import (
     excel,
     export,
     favorites,
+    feedback,
     federation,
     health,
     ingestion,
@@ -140,6 +141,9 @@ def _build_v1_router() -> APIRouter:
 
     # Audit trail
     v1.include_router(audit.router, prefix="/audit", tags=["audit"])
+
+    # Feedback and quality
+    v1.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
 
     # User preferences, favorites, notifications
     v1.include_router(settings.router, prefix="/settings", tags=["settings"])

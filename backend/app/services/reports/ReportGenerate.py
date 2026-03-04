@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import re
+import subprocess
+import sys as _sys
 from backend.app.repositories.dataframes import DuckDBDataFrameQuery, SQLiteDataFrameLoader, sqlite_shim as sqlite3
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -57,6 +59,44 @@ def _run_async(coro):
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(asyncio.run, coro).result()
     return asyncio.run(coro)
+
+
+_PDF_WORKER_SCRIPT = str(Path(__file__).with_name("_pdf_worker.py"))
+
+
+def _html_to_pdf_subprocess(
+    html_path: Path, pdf_path: Path, base_dir: Path, pdf_scale: float | None = None
+) -> None:
+    """Convert HTML to PDF by running Playwright in a dedicated subprocess.
+
+    This avoids the SIGCHLD / asyncio event-loop conflict that occurs when
+    ``asyncio.run()`` is called from a non-main thread inside uvicorn.
+    """
+    import json as _json
+
+    args_json = _json.dumps({
+        "html_path": str(html_path.resolve()),
+        "pdf_path": str(pdf_path.resolve()),
+        "base_dir": str((base_dir or html_path.parent).resolve()),
+        "pdf_scale": pdf_scale,
+    })
+
+    env = {**os.environ}
+    if "TMPDIR" not in env:
+        home_tmp = Path.home() / ".tmp"
+        if home_tmp.is_dir():
+            env["TMPDIR"] = str(home_tmp)
+
+    result = subprocess.run(
+        [_sys.executable, _PDF_WORKER_SCRIPT, args_json],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        env=env,
+    )
+    if result.returncode != 0:
+        stderr_tail = (result.stderr or "")[-2000:]
+        raise RuntimeError(f"PDF subprocess failed:\n{stderr_tail}")
 
 
 from .contract_adapter import ContractAdapter, format_decimal_str
@@ -228,6 +268,37 @@ def fill_and_print(
 
     PLACEHOLDER_TO_COL = contract_adapter.mapping
 
+    # ---- Validate contract against live schema (detect drift) ----
+    if PLACEHOLDER_TO_COL:
+        _available_tables = set(dataframe_loader.table_names())
+        _col_ref_re = re.compile(r"^([A-Za-z_][\w]*)\.([A-Za-z_][\w]*)$")
+        _missing_refs: list[str] = []
+        _columns_cache: dict[str, set[str]] = {}
+        for _token, _col_ref in PLACEHOLDER_TO_COL.items():
+            _m = _col_ref_re.match(str(_col_ref))
+            if not _m:
+                continue  # not a table.column ref — skip
+            _tbl, _col = _m.group(1), _m.group(2)
+            if _tbl not in _available_tables:
+                _missing_refs.append(f"  {_token!r} -> {_col_ref!r} (table {_tbl!r} not found)")
+                continue
+            if _tbl not in _columns_cache:
+                try:
+                    _columns_cache[_tbl] = set(dataframe_loader.frame(_tbl).columns)
+                except Exception:
+                    _columns_cache[_tbl] = set()
+            if _col not in _columns_cache[_tbl] and _col != "__rowid__":
+                _missing_refs.append(
+                    f"  {_token!r} -> {_col_ref!r} (column {_col!r} not in table {_tbl!r})"
+                )
+        if _missing_refs:
+            detail = "\n".join(_missing_refs)
+            raise RuntimeError(
+                f"Contract references columns that no longer exist in the database.\n"
+                f"Re-approve the template mapping to fix this.\n\n"
+                f"Missing references:\n{detail}"
+            )
+
     join_raw = OBJ.get("join", {}) or {}
     JOIN = {
         "parent_table": contract_adapter.parent_table or join_raw.get("parent_table", ""),
@@ -241,6 +312,9 @@ def fill_and_print(
     HEADER_TOKENS = contract_adapter.scalar_tokens or OBJ.get("header_tokens", [])
     ROW_TOKENS = contract_adapter.row_tokens or OBJ.get("row_tokens", [])
     TOTALS = contract_adapter.totals_mapping or OBJ.get("totals", {})
+    # If totals is empty but totals_math has keys, use those as TOTALS markers
+    if not TOTALS and contract_adapter.totals_math:
+        TOTALS = {k: "COMPUTED" for k in contract_adapter.totals_math}
     ROW_ORDER = contract_adapter.row_order or OBJ.get("row_order", ["ROWID"])
     LITERALS = {
         str(token): "" if value is None else str(value) for token, value in (OBJ.get("literals", {}) or {}).items()
@@ -447,7 +521,9 @@ def fill_and_print(
             try:
                 context = await browser.new_context(base_url=base_url)
                 page = await context.new_page()
-                await page.set_content(html_source, wait_until="networkidle")
+                _pdf_timeout_ms = int(os.environ.get("NEURA_PDF_RENDER_TIMEOUT_MS", "120000"))
+                page.set_default_timeout(_pdf_timeout_ms)
+                await page.set_content(html_source, wait_until="load", timeout=_pdf_timeout_ms)
                 await page.emulate_media(media="print")
                 scale_value = pdf_scale or 1.0
                 if not isinstance(scale_value, (int, float)):
@@ -668,7 +744,21 @@ def fill_and_print(
                         return dt_str.split(" ")[0]
                     return dt_str
 
-        # 5. Recipe aliases
+        # 5. Duration computation from start_time and end_time
+        if tok_low in ("duration_sec", "dur_sec", "duration"):
+            st = cf.get("start_time")
+            et = cf.get("end_time")
+            if st and et:
+                try:
+                    from .common_helpers import _parse_date_like
+                    st_dt = _parse_date_like(st)
+                    et_dt = _parse_date_like(et)
+                    if st_dt and et_dt:
+                        return int((et_dt - st_dt).total_seconds())
+                except Exception:
+                    pass
+
+        # 6. Recipe aliases
         if tok_low in ("recipe_code", "recipe_no"):
             return cf.get("recipe_name", cf.get("id", ""))
 
@@ -680,6 +770,8 @@ def fill_and_print(
                 return val
 
         return None
+
+    _warned_tokens: set[str] = set()  # log each unresolved token only once per generation
 
     def _value_for_token(row: Mapping[str, Any], token: str) -> Any:
         if not token:
@@ -699,6 +791,14 @@ def fill_and_print(
                 for key in row.keys():
                     if isinstance(key, str) and key.lower() == col.lower():
                         return row[key]
+        if token not in _warned_tokens:
+            _warned_tokens.add(token)
+            logger.warning(
+                "token_unresolved token=%s available_keys=%s",
+                token,
+                list(row.keys())[:10],
+                extra={"event": "token_unresolved", "token": token},
+            )
         return None
 
     def _prune_placeholder_rows(rows: Sequence[Mapping[str, Any]], tokens: Sequence[str]) -> list[dict[str, Any]]:
@@ -773,7 +873,7 @@ def fill_and_print(
 
             combined_html = _combine_html_documents(html_sections)
             OUT_HTML.write_text(combined_html, encoding="utf-8")
-            _run_async(html_to_pdf_async(OUT_HTML, OUT_PDF, TEMPLATE_PATH.parent))
+            _html_to_pdf_subprocess(OUT_HTML, OUT_PDF, TEMPLATE_PATH.parent)
             return {"html_path": str(OUT_HTML), "pdf_path": str(OUT_PDF), "rows_rendered": True}
         finally:
             for tmp_html_path, tmp_pdf_path in tmp_outputs:
@@ -998,6 +1098,7 @@ def fill_and_print(
         "rundate",
         "runon",
         "generatedat",
+        "reportdate",
     }
     PRINT_TIME_KEYS = {
         "printtime",
@@ -1244,9 +1345,13 @@ def fill_and_print(
         if token in ("from_date", "to_date"):
             continue
         if token in key_values_map:
-            first_value = _first_key_value(key_values_map[token])
-            if first_value is not None:
-                sql_params[token] = first_value
+            # Use comma-joined LITERALS for header display (multi-value support)
+            if token in LITERALS and LITERALS[token]:
+                sql_params[token] = LITERALS[token]
+            else:
+                first_value = _first_key_value(key_values_map[token])
+                if first_value is not None:
+                    sql_params[token] = first_value
         elif alias_link_map.get(token):
             alias_value = _first_alias_value(token)
             if alias_value is not None:
@@ -1282,6 +1387,12 @@ def fill_and_print(
         _inject(_DATE_PARAM_END_ALIASES, db_end)
 
     _apply_date_param_defaults(sql_params)
+
+    # Inject special values (report_date, generated_at, etc.) into sql_params
+    # so that params.xxx mappings in contract_adapter can resolve them.
+    for sv_key, sv_val in special_values.items():
+        if sv_key not in sql_params:
+            sql_params[sv_key] = sv_val
 
     if "recipe_code" in sql_params:
         _log_debug(
@@ -2027,6 +2138,49 @@ def fill_and_print(
                 rendered_blocks.append(blk_html)
             elif header_rows and HEADER_TOKENS:
                 logger.debug("Generator: header-only block; appending without row data.")
+                if ROW_TOKENS:
+                    # Header-only block that expected rows — inject "no data" message
+                    _no_data_msg = (
+                        '<tr><td colspan="100" style="text-align:center;padding:20px;'
+                        'color:#666;font-style:italic;">No data available for the '
+                        'selected date range</td></tr>'
+                    )
+                    _tbody_re = re.compile(r'(<tbody[^>]*>)(.*?)(</tbody>)', re.DOTALL)
+                    _tbody_match = _tbody_re.search(blk_html)
+                    if _tbody_match:
+                        blk_html = (
+                            blk_html[:_tbody_match.start(2)]
+                            + _no_data_msg
+                            + blk_html[_tbody_match.end(2):]
+                        )
+                    else:
+                        # No <tbody> — replace the block's row content
+                        blk_html = re.sub(
+                            r'<tr\b[^>]*>.*?</tr>',
+                            _no_data_msg,
+                            blk_html,
+                            count=1,
+                            flags=re.DOTALL,
+                        )
+                rendered_blocks.append(blk_html)
+            elif ROW_TOKENS:
+                # Had row tokens but no data and no headers — inject "no data" message
+                logger.debug("Generator produced no row data; injecting empty-state message.")
+                _no_data_msg = (
+                    '<tr><td colspan="100" style="text-align:center;padding:20px;'
+                    'color:#666;font-style:italic;">No data available for the '
+                    'selected date range</td></tr>'
+                )
+                _tbody_re = re.compile(r'(<tbody[^>]*>)(.*?)(</tbody>)', re.DOTALL)
+                _tbody_match = _tbody_re.search(blk_html)
+                if _tbody_match:
+                    blk_html = (
+                        blk_html[:_tbody_match.start(2)]
+                        + _no_data_msg
+                        + blk_html[_tbody_match.end(2):]
+                    )
+                else:
+                    blk_html = _no_data_msg
                 rendered_blocks.append(blk_html)
             else:
                 logger.debug("Generator produced no usable row data after filtering; skipping block.")
@@ -2089,7 +2243,24 @@ def fill_and_print(
                         logger.debug("Row fallback used: table=%s, rows=%d", maj_table, len(rows))
 
             if not rows:
-                logger.debug("No child rows found for batch %s; skipping block.", batch_id)
+                logger.debug("No child rows found for batch %s; injecting empty-state.", batch_id)
+                _no_data_msg = (
+                    '<tr><td colspan="100" style="text-align:center;padding:20px;'
+                    'color:#666;font-style:italic;">No data available for the '
+                    'selected date range</td></tr>'
+                )
+                _tbody_re_b = re.compile(r'(<tbody[^>]*>)(.*?)(</tbody>)', re.DOTALL)
+                _tbody_match_b = _tbody_re_b.search(block_html)
+                if _tbody_match_b:
+                    block_html = (
+                        block_html[:_tbody_match_b.start(2)]
+                        + _no_data_msg
+                        + block_html[_tbody_match_b.end(2):]
+                    )
+                else:
+                    # No <tbody> — replace entire block content with no-data row
+                    block_html = _no_data_msg
+                rendered_blocks.append(block_html)
                 continue
 
             significant_cols = [
@@ -2232,7 +2403,7 @@ def fill_and_print(
     _log_debug("Wrote HTML:", OUT_HTML)
 
     _fp_progress("starting PDF generation via Playwright")
-    _run_async(html_to_pdf_async(OUT_HTML, OUT_PDF, TEMPLATE_PATH.parent))
+    _html_to_pdf_subprocess(OUT_HTML, OUT_PDF, TEMPLATE_PATH.parent)
     _fp_progress("PDF generation complete")
     _log_debug("Wrote PDF via Playwright:", OUT_PDF)
 

@@ -92,7 +92,10 @@ export const toApiUrl = (url) => {
 
 // preconfigured axios instance
 
-export const api = axios.create({ baseURL: API_V1_BASE })
+export const api = axios.create({
+  baseURL: API_V1_BASE,
+  timeout: 300_000, // 5 min — matches backend request_timeout_seconds
+})
 
 const IDEMPOTENCY_HEADER = 'Idempotency-Key'
 const IDEMPOTENCY_LEGACY_HEADER = 'X-Idempotency-Key'
@@ -296,10 +299,37 @@ function getUserFriendlyError(error) {
   return error.message || 'An unexpected error occurred. Please try again.'
 }
 
-// Add response interceptor for error handling
+// Retry configuration for transient errors on idempotent methods
+const _MAX_RETRIES = 2
+const _RETRY_DELAY_MS = 1000
+const _RETRIABLE_STATUS_CODES = new Set([502, 503, 504, 408])
+const _RETRIABLE_METHODS = new Set(['get', 'head', 'options'])
+
+const _isRetriable = (error) => {
+  if (!error.config) return false
+  const method = (error.config.method || 'get').toLowerCase()
+  // Only retry idempotent methods — never retry POST/PUT/DELETE
+  if (!_RETRIABLE_METHODS.has(method)) return false
+  // Network error (no response at all)
+  if (!error.response) return true
+  // Server errors that are likely transient
+  return _RETRIABLE_STATUS_CODES.has(error.response.status)
+}
+
+// Add response interceptor for error handling and retry
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
+    const config = error.config || {}
+    config.__retryCount = config.__retryCount || 0
+
+    // Retry transient errors on idempotent methods
+    if (_isRetriable(error) && config.__retryCount < _MAX_RETRIES) {
+      config.__retryCount += 1
+      const delay = _RETRY_DELAY_MS * config.__retryCount
+      await new Promise((r) => setTimeout(r, delay))
+      return api.request(config)
+    }
     // Preserve original error but add user-friendly message
     error.userMessage = getUserFriendlyError(error)
     const requestUrl = error?.config?.url
@@ -315,6 +345,7 @@ api.interceptors.response.use(
         context: {
           userMessage: error.userMessage,
           responseData: error?.response?.data,
+          retriesExhausted: config.__retryCount || 0,
         },
       })
     }
@@ -1883,7 +1914,7 @@ export async function listTemplates({ status, kind = 'all' } = {}) {
     if (kind === 'pdf') return templates.filter((tpl) => (tpl.kind || 'pdf') === 'pdf')
     return templates
   }
-  const params = {}
+  const params = { limit: 200 }
   if (status) params.status = status
   const { data } = await api.get('/templates', { params })
   const templates = Array.isArray(data?.templates) ? data.templates : []
@@ -1899,7 +1930,7 @@ export async function listApprovedTemplates({ kind = 'all' } = {}) {
     if (kind === 'pdf') return templates.filter((tpl) => (tpl.kind || 'pdf') === 'pdf')
     return templates
   }
-  const params = { status: 'approved' }
+  const params = { status: 'approved', limit: 200 }
   const { data } = await api.get('/templates', { params })
   const templates = Array.isArray(data?.templates) ? data.templates : []
   if (kind === 'excel') return templates.filter((tpl) => (tpl.kind || 'pdf') === 'excel')

@@ -39,6 +39,12 @@ async def enqueue_report_job_excel(payload: RunPayload | list[RunPayload], reque
     return await queue_report_job(payload, request, kind="excel")
 
 
+@router.post("/jobs/generate-docx/{run_id}")
+async def enqueue_generate_docx(run_id: str, request: Request):
+    """Queue a background job to convert a run's PDF to DOCX."""
+    return await queue_generate_docx_job(run_id, request)
+
+
 @router.get("/reports/runs")
 def list_report_runs_route(
     request: Request,
@@ -74,9 +80,3 @@ def generate_docx_route(run_id: str, request: Request):
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail={"status": "error", "code": "generate_docx_failed", "message": str(exc)})
     return {"run": run, "correlation_id": getattr(request.state, "correlation_id", None)}
-
-
-@router.post("/jobs/generate-docx/{run_id}")
-async def enqueue_generate_docx(run_id: str, request: Request):
-    """Queue a background job to convert a run's PDF to DOCX."""
-    return await queue_generate_docx_job(run_id, request)

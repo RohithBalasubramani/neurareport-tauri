@@ -16,7 +16,6 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from backend.app.api.idempotency import IdempotencyMiddleware, IdempotencyStore
-from backend.app.services.observability.metrics import PrometheusMiddleware, metrics_endpoint
 from backend.app.services.utils.context import set_correlation_id
 from backend.app.services.config import Settings
 from .ux_governance import UXGovernanceMiddleware, IntentHeaders
@@ -308,9 +307,13 @@ def add_middlewares(app: FastAPI, settings: Settings) -> None:
 
     # Prometheus metrics middleware (after correlation ID, before other middleware)
     if settings.metrics_enabled:
-        app.add_middleware(PrometheusMiddleware, app_name=settings.app_name)
-        app.add_route("/metrics", metrics_endpoint, methods=["GET"])
-        logger.info("metrics_enabled", extra={"event": "metrics_enabled", "app_name": settings.app_name})
+        try:
+            from backend.app.services.observability.metrics import PrometheusMiddleware, metrics_endpoint
+            app.add_middleware(PrometheusMiddleware, app_name=settings.app_name)
+            app.add_route("/metrics", metrics_endpoint, methods=["GET"])
+            logger.info("metrics_enabled", extra={"event": "metrics_enabled", "app_name": settings.app_name})
+        except ImportError:
+            logger.warning("prometheus_client not installed, metrics disabled")
 
     # OpenTelemetry tracing (conditional on OTLP endpoint being configured)
     if settings.otlp_endpoint:
@@ -405,7 +408,7 @@ def add_middlewares(app: FastAPI, settings: Settings) -> None:
         # Note: allow_credentials=True is incompatible with allow_origins=["*"]
         app.add_middleware(
             CORSMiddleware,
-            allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+            allow_origin_regex=r"(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost|https?://tauri\.localhost)",
             allow_methods=cors_methods,
             allow_headers=cors_headers,
             allow_credentials=True,

@@ -146,6 +146,9 @@ pub fn run() {
                 let mut cmd = Command::new(&backend_exe);
                 cmd.args(["--port", &port.to_string()])
                     .env("PYTHONUNBUFFERED", "1")
+                    // Desktop app is always a local/trusted environment
+                    .env("NEURA_DEBUG", "true")
+                    .env("NEURA_JWT_SECRET", "neurareport-desktop-local")
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped());
 

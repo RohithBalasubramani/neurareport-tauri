@@ -128,8 +128,21 @@ def mapping_key_options(
             if isinstance(join_section, dict):
                 contract_join = join_section
 
-    db_path = db_path_from_payload_or_default(effective_connection_id)
-    verify_sqlite(db_path)
+    try:
+        db_path = db_path_from_payload_or_default(effective_connection_id)
+        verify_sqlite(db_path)
+    except Exception as exc:
+        logger.warning(
+            "mapping_key_options_db_unavailable",
+            extra={
+                "event": "mapping_key_options_db_unavailable",
+                "template_id": template_id,
+                "connection_id": effective_connection_id,
+                "error": str(exc),
+                "correlation_id": correlation_id,
+            },
+        )
+        return {"keys": {}}
 
     options: dict[str, list[str]] = {}
     debug_payload: dict[str, Any] = {

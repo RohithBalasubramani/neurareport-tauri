@@ -71,7 +71,21 @@ def _html_to_pdf_subprocess(
 
     This avoids the SIGCHLD / asyncio event-loop conflict that occurs when
     ``asyncio.run()`` is called from a non-main thread inside uvicorn.
+
+    In PyInstaller frozen mode, sys.executable is the bundled exe which
+    cannot run .py scripts, so we call the worker function in-process.
     """
+    # PyInstaller frozen mode: run in-process (no subprocess possible)
+    if getattr(_sys, "frozen", False):
+        from ._pdf_worker import _convert
+        _run_async(_convert(
+            html_path=str(html_path.resolve()),
+            pdf_path=str(pdf_path.resolve()),
+            base_dir=str((base_dir or html_path.parent).resolve()),
+            pdf_scale=pdf_scale,
+        ))
+        return
+
     import json as _json
 
     args_json = _json.dumps({

@@ -1085,6 +1085,8 @@ class StateStore:
             "scheduleId": rec.get("schedule_id"),
             "scheduleName": rec.get("schedule_name"),
             "createdAt": rec.get("created_at"),
+            "startedAt": rec.get("started_at") or rec.get("created_at"),
+            "finishedAt": rec.get("finished_at") or rec.get("created_at"),
         }
 
     def record_report_run(
@@ -1104,6 +1106,8 @@ class StateStore:
         artifacts: Optional[Mapping[str, Any]] = None,
         schedule_id: Optional[str] = None,
         schedule_name: Optional[str] = None,
+        started_at: Optional[str] = None,
+        finished_at: Optional[str] = None,
     ) -> Optional[dict]:
         if not run_id or not template_id:
             return None
@@ -1124,6 +1128,8 @@ class StateStore:
             "schedule_id": schedule_id,
             "schedule_name": schedule_name,
             "created_at": now,
+            "started_at": started_at or now,
+            "finished_at": finished_at or now,
         }
         with self._lock:
             state = self._read_state()

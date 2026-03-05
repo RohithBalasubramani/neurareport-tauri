@@ -509,14 +509,20 @@ class ContractAdapter:
         if op == "subtract":
             left = self._resolve_agg_or_col(df, op_spec.get("left", 0))
             right = self._resolve_agg_or_col(df, op_spec.get("right", 0))
+            if left is None or right is None:
+                return None
             return left - right
         elif op == "add":
             left = self._resolve_agg_or_col(df, op_spec.get("left", 0))
             right = self._resolve_agg_or_col(df, op_spec.get("right", 0))
+            if left is None or right is None:
+                return None
             return left + right
         elif op == "multiply":
             left = self._resolve_agg_or_col(df, op_spec.get("left", 0))
             right = self._resolve_agg_or_col(df, op_spec.get("right", 0))
+            if left is None or right is None:
+                return None
             return left * right
         elif op == "divide":
             num_spec = op_spec.get("numerator", op_spec.get("left", ""))

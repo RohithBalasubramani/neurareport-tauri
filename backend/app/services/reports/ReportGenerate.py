@@ -1537,6 +1537,28 @@ def fill_and_print(
     def format_token_value(token: str, raw_value: Any) -> str:
         return contract_adapter.format_value(token, raw_value)
 
+    def _fast_row_sub(template: str, tokens: list[str], col_lookup: dict[str, str],
+                      rows: list[dict]) -> list[str]:
+        """Single-pass token substitution for row templates (no <style>/<script>).
+
+        Pre-compiles ONE regex for all tokens and replaces them in a single
+        re.sub call per row — O(rows) instead of O(rows × tokens).
+        """
+        if not tokens:
+            return [template] * len(rows)
+        token_alts = "|".join(re.escape(t) for t in tokens)
+        pat = re.compile(r"\{\{?\s*(" + token_alts + r")\s*\}\}?")
+        results = []
+        for r in rows:
+            def _repl(m, _row=r):
+                t = m.group(1)
+                col = col_lookup.get(t)
+                if not col:
+                    return m.group(0)
+                return format_token_value(t, _row.get(col))
+            results.append(pat.sub(_repl, template))
+        return results
+
     def _inject_page_counter_spans(
         html_in: str,
         page_tokens: set[str],
@@ -2333,28 +2355,20 @@ def fill_and_print(
 
             _reindex_serial_fields(filtered_rows, row_tokens_in_template, row_cols_needed)
 
-            parts: list[str] = []
+            # Pre-build column lookup once per batch (avoids repeated _extract_col_name)
+            _row_col_lookup = {}
+            for t in row_tokens_in_template:
+                col = _extract_col_name(PLACEHOLDER_TO_COL.get(t))
+                if col:
+                    _row_col_lookup[t] = col
+
             if row_render_mode == "tbody" and row_template and row_span and tbody_m and tbody_inner:
-                for r in filtered_rows:
-                    tr = row_template
-                    for t in row_tokens_in_template:
-                        col = _extract_col_name(PLACEHOLDER_TO_COL.get(t))
-                        if not col:
-                            continue
-                        tr = sub_token(tr, t, format_token_value(t, r.get(col)))
-                    parts.append(tr)
+                parts = _fast_row_sub(row_template, row_tokens_in_template, _row_col_lookup, filtered_rows)
 
                 new_tbody_inner = tbody_inner[: row_span[0]] + "\n".join(parts) + tbody_inner[row_span[1] :]
                 block_html = block_html[: tbody_m.start(1)] + new_tbody_inner + block_html[tbody_m.end(1) :]
             else:
-                for r in filtered_rows:
-                    tr = prototype_block  # the <tr> itself
-                    for t in row_tokens_in_template:
-                        col = _extract_col_name(PLACEHOLDER_TO_COL.get(t))
-                        if not col:
-                            continue
-                        tr = sub_token(tr, t, format_token_value(t, r.get(col)))
-                    parts.append(tr)
+                parts = _fast_row_sub(prototype_block, row_tokens_in_template, _row_col_lookup, filtered_rows)
 
                 block_html = "\n".join(parts)
 

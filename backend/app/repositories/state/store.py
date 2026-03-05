@@ -645,6 +645,29 @@ class StateStore:
         except Exception:
             return path
 
+    def prune_stale_connections(self) -> int:
+        """Remove connection entries whose database files no longer exist."""
+        from pathlib import Path
+        removed = 0
+        with self._lock:
+            state = self._read_state()
+            connections = state.get("connections") or {}
+            stale_ids = []
+            for cid, rec in connections.items():
+                db_path = rec.get("database_path")
+                if not db_path:
+                    stale_ids.append(cid)
+                    continue
+                if not Path(db_path).exists():
+                    stale_ids.append(cid)
+            if stale_ids:
+                for cid in stale_ids:
+                    del connections[cid]
+                state["connections"] = connections
+                self._write_state(state)
+                removed = len(stale_ids)
+        return removed
+
     # ------------------------------------------------------------------
     # template helpers
     # ------------------------------------------------------------------

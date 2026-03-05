@@ -465,11 +465,16 @@ export default function ReportsPage() {
     }
   }, [toast])
 
-  const handleKeyValueChange = useCallback((key, value) => {
-    setKeyValues((prev) => ({
-      ...prev,
-      [key]: value,
-    }))
+  const handleKeyValueChange = useCallback((key, value, allOptions) => {
+    if (Array.isArray(value) && value.includes('__all__')) {
+      // Toggle all: if everything was selected, clear; otherwise select all
+      const opts = allOptions || []
+      const prev = Array.isArray(value) ? value.filter(v => v !== '__all__') : []
+      const allSelected = prev.length >= opts.length
+      setKeyValues((p) => ({ ...p, [key]: allSelected ? [] : [...opts] }))
+    } else {
+      setKeyValues((prev) => ({ ...prev, [key]: value }))
+    }
   }, [])
 
   const handleDatePreset = useCallback((presetKey) => {
@@ -539,7 +544,7 @@ export default function ReportsPage() {
             connectionId: activeConnection.id,
             startDate: startDate || undefined,
             endDate: endDate || undefined,
-            keyValues: Object.keys(keyValues).length > 0 ? keyValues : undefined,
+            keyValues: (() => { const kv = Object.fromEntries(Object.entries(keyValues).filter(([, v]) => Array.isArray(v) ? v.length > 0 : !!v)); return Object.keys(kv).length > 0 ? kv : undefined })(),
             batchIds: useSelectedBatches ? selectedBatches : undefined,
             kind: template?.kind || 'pdf',
             xlsx: template?.kind === 'excel',
@@ -897,15 +902,35 @@ export default function ReportsPage() {
                     <StyledFormControl key={key} fullWidth size="small">
                       <InputLabel>{key}</InputLabel>
                       <Select
-                        value={keyValues[key] || ''}
-                        onChange={(e) => handleKeyValueChange(key, e.target.value)}
+                        multiple
+                        value={keyValues[key] || []}
+                        onChange={(e) => handleKeyValueChange(key, e.target.value, keyOptions[key] || [])}
                         label={key}
+                        renderValue={(selected) => {
+                          const clean = selected.filter(v => v !== '__all__')
+                          return clean.length === 0
+                            ? 'All'
+                            : (
+                              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                                {clean.map((v) => (
+                                  <Chip key={v} label={v} size="small" />
+                                ))}
+                              </Box>
+                            )
+                        }}
                       >
-                        <MenuItem value="">
+                        <MenuItem value="__all__">
+                          <Checkbox
+                            checked={(keyValues[key] || []).length === (keyOptions[key] || []).length && (keyOptions[key] || []).length > 0}
+                            indeterminate={(keyValues[key] || []).length > 0 && (keyValues[key] || []).length < (keyOptions[key] || []).length}
+                            size="small"
+                          />
                           <em>All</em>
                         </MenuItem>
+                        <Divider />
                         {(keyOptions[key] || []).map((option) => (
                           <MenuItem key={option} value={option}>
+                            <Checkbox checked={(keyValues[key] || []).includes(option)} size="small" />
                             {option}
                           </MenuItem>
                         ))}

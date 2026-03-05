@@ -112,6 +112,17 @@ def _stringify_value(value: Any) -> str:
     return text.strip()
 
 
+def _vectorized_stringify(series: pd.Series) -> pd.Series:
+    """Vectorized equivalent of series.apply(_stringify_value)."""
+    return series.fillna("").astype(str).str.strip()
+
+
+def _vectorized_bid(df: pd.DataFrame, columns: list[str]) -> pd.Series:
+    """Build batch ID from multiple columns, joined by '|' — vectorized."""
+    parts = [df[col].fillna("").astype(str).str.strip() for col in columns]
+    return parts[0].str.cat(parts[1:], sep="|")
+
+
 def _coerce_datetime_series(series: pd.Series) -> pd.Series:
     if pd.api.types.is_datetime64_any_dtype(series):
         result = series
@@ -197,12 +208,12 @@ def _build_batch_index(df: pd.DataFrame, key_columns: List[str], *, use_rowid: b
         col = columns[0]
         if col not in working.columns:
             working[col] = None
-        working["__bid__"] = working[col].apply(_stringify_value)
+        working["__bid__"] = _vectorized_stringify(working[col])
     else:
         for col in columns:
             if col not in working.columns:
                 working[col] = None
-        working["__bid__"] = working[columns].apply(lambda row: "|".join(_stringify_value(v) for v in row), axis=1)
+        working["__bid__"] = _vectorized_bid(working, columns)
     sort_cols = columns or ["__bid__"]
     working_sorted = working.sort_values(sort_cols, kind="mergesort")
     ordered_ids: list[str] = []
@@ -242,9 +253,9 @@ def _attach_batch_id(df: pd.DataFrame, key_columns: List[str], *, use_rowid: boo
 
     if len(columns) == 1:
         col = columns[0]
-        working["__bid__"] = working[col].apply(_stringify_value)
+        working["__bid__"] = _vectorized_stringify(working[col])
     else:
-        working["__bid__"] = working[columns].apply(lambda row: "|".join(_stringify_value(v) for v in row), axis=1)
+        working["__bid__"] = _vectorized_bid(working, columns)
 
     return working
 
@@ -285,15 +296,12 @@ def _build_batch_metadata(
         col = columns[0]
         if col not in working.columns:
             working[col] = None
-        working["__bid__"] = working[col].apply(_stringify_value)
+        working["__bid__"] = _vectorized_stringify(working[col])
     else:
         for col in columns:
             if col not in working.columns:
                 working[col] = None
-        working["__bid__"] = working[columns].apply(
-            lambda row: "|".join(_stringify_value(v) for v in row),
-            axis=1,
-        )
+        working["__bid__"] = _vectorized_bid(working, columns)
 
     metadata: Dict[str, Dict[str, object]] = {}
 
@@ -326,7 +334,7 @@ def _build_batch_metadata(
         if col not in working.columns:
             continue
         label_field = f"_nr_label_{col}"
-        working[label_field] = working[col].apply(_stringify_value)
+        working[label_field] = _vectorized_stringify(working[col])
         grouped = working.groupby("__bid__")[label_field].first()
         for bid, raw_val in grouped.items():
             text = _stringify_value(raw_val)
@@ -338,7 +346,7 @@ def _build_batch_metadata(
                 meta["category"] = text
 
     if category_source and category_source in working.columns:
-        working["_nr_category"] = working[category_source].apply(_stringify_value)
+        working["_nr_category"] = _vectorized_stringify(working[category_source])
         grouped_cat = working.groupby("__bid__")["_nr_category"].first()
         for bid, cat in grouped_cat.items():
             text = _stringify_value(cat)

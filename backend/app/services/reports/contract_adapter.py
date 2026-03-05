@@ -922,9 +922,10 @@ class ContractAdapter:
                     existing = [c for c in alias_cols if c in df.columns]
                     if existing:
                         df = df.dropna(subset=existing, how="all")
-                        str_mask = df[existing].astype(str).apply(
-                            lambda row: not all(v.strip() == "" for v in row), axis=1
-                        )
+                        str_df = df[existing].fillna("").astype(str)
+                        for c in str_df.columns:
+                            str_df[c] = str_df[c].str.strip()
+                        str_mask = (str_df != "").any(axis=1)
                         df = df.loc[str_mask].reset_index(drop=True)
 
             elif strategy == "MELT" and columns:

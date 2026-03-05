@@ -36,7 +36,7 @@ function resolveBaseUrl(url) {
   } catch (_) { /* not a full URL, keep as-is */ }
   return url
 }
-export let API_BASE = envBaseUrl === 'proxy' ? '/api' : (resolveBaseUrl(envBaseUrl) || 'http://127.0.0.1:8000')
+export let API_BASE = envBaseUrl === 'proxy' ? '/api' : (resolveBaseUrl(envBaseUrl) || 'http://127.0.0.1:9070')
 
 // Canonical API version base (plan.md): clients target `/api/v1` only.
 export let API_V1_BASE =

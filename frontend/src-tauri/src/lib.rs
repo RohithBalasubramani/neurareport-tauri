@@ -97,9 +97,9 @@ pub fn run() {
             #[cfg(debug_assertions)]
             {
                 let dev_port: u16 = std::env::var("NEURA_DEV_PORT")
-                    .unwrap_or_else(|_| "8000".to_string())
+                    .unwrap_or_else(|_| "9070".to_string())
                     .parse()
-                    .unwrap_or(8000);
+                    .unwrap_or(9070);
                 log(&format!(
                     "[tauri] Dev mode — expecting backend on port {} (set NEURA_DEV_PORT to override)",
                     dev_port

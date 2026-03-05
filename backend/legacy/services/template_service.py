@@ -4,7 +4,9 @@ import contextlib
 import os
 import re
 import shutil
+import stat
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -70,6 +72,31 @@ def _get_template_service() -> TemplateService:
             max_concurrency=settings.template_import_max_concurrency,
         )
     return _TEMPLATE_SERVICE
+
+
+def _robust_rmtree(path: Path, retries: int = 3, delay: float = 0.5) -> None:
+    """Remove a directory tree with Windows-robust error handling.
+
+    On Windows, files may be locked by antivirus, search indexer, or stale
+    handles. This retries after clearing read-only flags.
+    """
+    def _on_error(func, fpath, exc_info):
+        # Clear read-only flag and retry
+        try:
+            os.chmod(fpath, stat.S_IWRITE)
+            func(fpath)
+        except Exception:
+            pass
+
+    for attempt in range(retries):
+        try:
+            shutil.rmtree(path, onerror=_on_error)
+            return
+        except PermissionError:
+            if attempt < retries - 1:
+                time.sleep(delay)
+            else:
+                raise
 
 
 def _http_error(status_code: int, code: str, message: str, details: str | None = None) -> HTTPException:
@@ -363,7 +390,7 @@ def delete_template(template_id: str, request: Request):
     with lock_ctx:
         if tdir.exists():
             try:
-                shutil.rmtree(tdir)
+                _robust_rmtree(tdir)
                 removed_dir = True
             except FileNotFoundError:
                 removed_dir = False

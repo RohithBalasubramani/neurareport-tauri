@@ -502,6 +502,11 @@ class ContractAdapter:
             # Sort by timestamp if available, then keep first row per batch
             if ts_col and ts_col in df.columns:
                 df = df.sort_values(ts_col, ascending=True)
+                # Capture last timestamp per batch as end_timestamp_utc
+                # (before dedup removes them)
+                end_ts = df.groupby(batch_col, sort=False)[ts_col].transform("last")
+                df = df.copy()
+                df["end_timestamp_utc"] = end_ts
             df = df.drop_duplicates(subset=[batch_col], keep="first")
 
         logger.info("pre_aggregate applied: %s → %d rows", strategy, len(df))
@@ -529,6 +534,19 @@ class ContractAdapter:
                 return actual
         return None
 
+    @staticmethod
+    def _coerce_numeric(val):
+        """Coerce a value or Series to numeric for arithmetic ops."""
+        import pandas as pd
+        if isinstance(val, pd.Series):
+            return pd.to_numeric(val, errors="coerce").fillna(0)
+        if isinstance(val, str):
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return 0
+        return val
+
     def _apply_declarative_op(self, df, op_spec) -> Any:
         """Interpret a declarative operation spec and return computed result.
 
@@ -544,28 +562,28 @@ class ContractAdapter:
 
         op = op_spec.get("op", "").lower()
         if op == "subtract":
-            left = self._resolve_agg_or_col(df, op_spec.get("left", 0))
-            right = self._resolve_agg_or_col(df, op_spec.get("right", 0))
+            left = self._coerce_numeric(self._resolve_agg_or_col(df, op_spec.get("left", 0)))
+            right = self._coerce_numeric(self._resolve_agg_or_col(df, op_spec.get("right", 0)))
             if left is None or right is None:
                 return None
             return left - right
         elif op == "add":
-            left = self._resolve_agg_or_col(df, op_spec.get("left", 0))
-            right = self._resolve_agg_or_col(df, op_spec.get("right", 0))
+            left = self._coerce_numeric(self._resolve_agg_or_col(df, op_spec.get("left", 0)))
+            right = self._coerce_numeric(self._resolve_agg_or_col(df, op_spec.get("right", 0)))
             if left is None or right is None:
                 return None
             return left + right
         elif op == "multiply":
-            left = self._resolve_agg_or_col(df, op_spec.get("left", 0))
-            right = self._resolve_agg_or_col(df, op_spec.get("right", 0))
+            left = self._coerce_numeric(self._resolve_agg_or_col(df, op_spec.get("left", 0)))
+            right = self._coerce_numeric(self._resolve_agg_or_col(df, op_spec.get("right", 0)))
             if left is None or right is None:
                 return None
             return left * right
         elif op == "divide":
             num_spec = op_spec.get("numerator", op_spec.get("left", ""))
             den_spec = op_spec.get("denominator", op_spec.get("right", ""))
-            num = self._resolve_agg_or_col(df, num_spec)
-            den = self._resolve_agg_or_col(df, den_spec)
+            num = self._coerce_numeric(self._resolve_agg_or_col(df, num_spec))
+            den = self._coerce_numeric(self._resolve_agg_or_col(df, den_spec))
             if isinstance(den, (int, float)) and den == 0:
                 return None
             if isinstance(num, pd.Series) and isinstance(den, pd.Series):

@@ -612,17 +612,16 @@ def discover_batches_and_counts(
         numeric_cols = [
             col for col in df.columns if col not in skip_cols and pd.api.types.is_numeric_dtype(df[col])
         ]
-        aggregates: dict[str, dict[str, float]] = {}
         if not numeric_cols:
-            return aggregates
-        grouped = df.groupby("__bid__")
-        for bid, group in grouped:
-            entry: dict[str, float] = {}
-            for col in numeric_cols:
-                try:
-                    entry[f"{prefix}{col}"] = float(pd.to_numeric(group[col], errors="coerce").sum())
-                except Exception:
-                    continue
+            return {}
+        # Vectorized: coerce all numeric columns at once, then groupby.sum()
+        coerced = df[["__bid__"] + numeric_cols].copy()
+        for col in numeric_cols:
+            coerced[col] = pd.to_numeric(coerced[col], errors="coerce")
+        summed = coerced.groupby("__bid__")[numeric_cols].sum()
+        aggregates: dict[str, dict[str, float]] = {}
+        for bid, row in summed.iterrows():
+            entry = {f"{prefix}{col}": float(row[col]) for col in numeric_cols if pd.notna(row[col])}
             if entry:
                 aggregates[str(bid)] = entry
         return aggregates
@@ -635,22 +634,26 @@ def discover_batches_and_counts(
             "margin": "margin_amount",
             "cost": "cost_amount",
         }
+        available = {name: col for name, col in metric_sources.items() if col in df.columns}
+        if not available:
+            return {}
+        # Vectorized: coerce once, then groupby.agg()
+        cols = list(available.values())
+        coerced = df[["__bid__"] + cols].copy()
+        for col in cols:
+            coerced[col] = pd.to_numeric(coerced[col], errors="coerce")
+        grouped = coerced.groupby("__bid__")
+        summed = grouped[cols].sum()
         aggregates: dict[str, dict[str, float]] = {}
-        grouped = df.groupby("__bid__")
-        for bid, group in grouped:
+        revenue_col = metric_sources.get("revenue")
+        has_revenue = revenue_col and revenue_col in cols
+        mean_revenue = grouped[revenue_col].mean() if has_revenue else None
+        for bid, row in summed.iterrows():
             entry: dict[str, float] = {}
-            for metric_name, column in metric_sources.items():
-                if column not in group.columns:
-                    continue
-                numeric_series = pd.to_numeric(group[column], errors="coerce")
-                entry[metric_name] = float(numeric_series.sum(skipna=True))
-            revenue_col = metric_sources["revenue"]
-            if revenue_col in group.columns:
-                revenue_series = pd.to_numeric(group[revenue_col], errors="coerce")
-                if revenue_series.count():
-                    entry["avg_order_value"] = float(revenue_series.mean(skipna=True))
-                else:
-                    entry["avg_order_value"] = 0.0
+            for metric_name, column in available.items():
+                entry[metric_name] = float(row[column])
+            if has_revenue and mean_revenue is not None:
+                entry["avg_order_value"] = float(mean_revenue.loc[bid])
             if entry:
                 aggregates[str(bid)] = entry
         return aggregates

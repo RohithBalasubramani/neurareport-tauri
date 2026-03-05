@@ -162,7 +162,7 @@ class RequestTimeoutMiddleware:
 
         path = scope.get("path", "")
         timeout = self.timeout_seconds
-        if "/stream" in path or "/upload" in path:
+        if "/stream" in path or "/upload" in path or "/discover" in path:
             timeout = timeout * 2
 
         try:

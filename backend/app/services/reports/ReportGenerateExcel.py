@@ -78,7 +78,33 @@ def _html_to_pdf_subprocess(
 
     This avoids the SIGCHLD / asyncio event-loop conflict that occurs when
     ``asyncio.run()`` is called from a non-main thread inside uvicorn.
+
+    In PyInstaller frozen mode, sys.executable is the bundled exe which
+    cannot run .py scripts, so we use multiprocessing instead.
     """
+    # PyInstaller frozen mode: use multiprocessing for process isolation
+    if getattr(_sys, "frozen", False):
+        import multiprocessing
+        from ._pdf_worker import convert_sync
+        proc = multiprocessing.Process(
+            target=convert_sync,
+            args=(
+                str(html_path.resolve()),
+                str(pdf_path.resolve()),
+                str((base_dir or html_path.parent).resolve()),
+                pdf_scale,
+            ),
+        )
+        proc.start()
+        proc.join(timeout=600)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
+            raise RuntimeError("PDF generation timed out (10 min)")
+        if proc.exitcode != 0:
+            raise RuntimeError(f"PDF generation failed (exit code {proc.exitcode})")
+        return
+
     import json as _json
 
     args_json = _json.dumps({

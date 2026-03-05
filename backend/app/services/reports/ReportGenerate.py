@@ -791,6 +791,17 @@ def fill_and_print(
                 return ts.split(" ", 1)[1]
             return ts
 
+        # 3c. End time fallback: end_time → end_timestamp_utc (or timestamp_utc)
+        if tok_low in ("end_time",):
+            for et_col in ("end_timestamp_utc", "end_time"):
+                if et_col in cf:
+                    ts = str(cf[et_col])
+                    if "T" in ts:
+                        return ts.split("T", 1)[1]
+                    if " " in ts:
+                        return ts.split(" ", 1)[1]
+                    return ts
+
         # 4. Date derivation: batch_date → date portion of start_time/end_time/timestamp_utc
         if "date" in tok_low:
             for dt_col in ("start_time", "end_time", "timestamp_utc"):
@@ -802,19 +813,30 @@ def fill_and_print(
                         return dt_str.split(" ")[0]
                     return dt_str
 
-        # 5. Duration computation from start_time and end_time
+        # 5. Duration computation from start_time and end_time (or timestamp_utc / end_timestamp_utc)
         if tok_low in ("duration_sec", "dur_sec", "duration"):
-            st = cf.get("start_time")
-            et = cf.get("end_time")
-            if st and et:
+            from datetime import datetime
+            def _try_parse_iso(s):
+                if not s:
+                    return None
+                s = str(s)
                 try:
-                    from .common_helpers import _parse_date_like
-                    st_dt = _parse_date_like(st)
-                    et_dt = _parse_date_like(et)
-                    if st_dt and et_dt:
-                        return int((et_dt - st_dt).total_seconds())
-                except Exception:
+                    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+                except (ValueError, TypeError):
                     pass
+                for pat in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+                    try:
+                        return datetime.strptime(s, pat)
+                    except ValueError:
+                        continue
+                return None
+
+            st_raw = cf.get("start_time") or cf.get("timestamp_utc")
+            et_raw = cf.get("end_time") or cf.get("end_timestamp_utc")
+            st_dt = _try_parse_iso(st_raw)
+            et_dt = _try_parse_iso(et_raw)
+            if st_dt and et_dt:
+                return int(abs((et_dt - st_dt).total_seconds()))
 
         # 6. Recipe aliases
         if tok_low in ("recipe_code", "recipe_no"):

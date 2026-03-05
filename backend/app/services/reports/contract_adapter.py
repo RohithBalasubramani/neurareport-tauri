@@ -451,6 +451,17 @@ class ContractAdapter:
             mask = mask & (dt_series <= end_dt)
         return df.loc[mask.fillna(False)]
 
+    @staticmethod
+    def _normalize_numeric_str(s: str) -> str:
+        """Normalize numeric strings: '1.0' → '1', '2.00' → '2', 'abc' → 'abc'."""
+        try:
+            f = float(s)
+            if f == int(f):
+                return str(int(f))
+            return str(f)
+        except (ValueError, TypeError):
+            return s
+
     def _apply_value_filters_df(self, df, value_filters: Dict[str, list]):
         """Apply equality filters from contract optional_filters."""
         import pandas as pd
@@ -467,8 +478,11 @@ class ContractAdapter:
             normalized = [str(v).strip() for v in filter_values if str(v or "").strip()]
             if not normalized:
                 continue
+            # Normalize both sides for numeric comparison (e.g. "1" matches "1.0")
+            norm_set = set(normalized) | {self._normalize_numeric_str(v) for v in normalized}
             series = df[col_name].astype(str).str.strip()
-            mask = mask & series.isin(normalized)
+            norm_series = series.map(self._normalize_numeric_str)
+            mask = mask & (series.isin(norm_set) | norm_series.isin(norm_set))
         return df.loc[mask.fillna(False)]
 
     def _apply_pre_aggregate_df(self, df):

@@ -32,9 +32,12 @@ def test_connection(payload: TestPayload) -> dict[str, Any]:
             db_path=payload.database if (payload.db_type or "").lower() == "sqlite" else None,
         )
         verify_sqlite(db_path)
+    except FileNotFoundError as exc:
+        logger.warning("test_connection_file_not_found: %s", exc)
+        raise _http_error(400, "file_not_found", f"Database file not found: {exc}")
     except Exception as exc:
         logger.exception("test_connection_failed")
-        raise _http_error(400, "connection_invalid", "Connection test failed")
+        raise _http_error(400, "connection_invalid", f"Connection test failed: {exc}")
 
     latency_ms = int((time.time() - t0) * 1000)
     resolved = Path(db_path).resolve()

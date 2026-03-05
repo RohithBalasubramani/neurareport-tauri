@@ -710,6 +710,25 @@ def fill_and_print(
         serial_columns = [col for col in columns if _is_counter_field(col)]
         if not serial_tokens and not serial_columns:
             return
+
+        # Skip fields whose existing values are non-numeric strings
+        # (e.g. MELT-produced literals like "Scale-2", "Scale-3").
+        def _has_non_numeric(field: str) -> bool:
+            for row in rows:
+                val = row.get(field)
+                if val is None or isinstance(val, (int, float)):
+                    continue
+                try:
+                    float(str(val))
+                except (ValueError, TypeError):
+                    return True
+            return False
+
+        serial_tokens = [t for t in serial_tokens if not _has_non_numeric(t)]
+        serial_columns = [c for c in serial_columns if not _has_non_numeric(c)]
+        if not serial_tokens and not serial_columns:
+            return
+
         for idx, row in enumerate(rows, start=1):
             for tok in serial_tokens:
                 row[tok] = idx

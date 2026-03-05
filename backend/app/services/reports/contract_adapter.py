@@ -176,6 +176,7 @@ class ContractAdapter:
         self._optional_filters = _ensure_mapping(filters.get("optional"))
 
         self._pre_aggregate = self._raw.get("pre_aggregate") or {}
+        self._group_aggregate = self._raw.get("group_aggregate") or {}
         self._reshape_rules = self._raw.get("reshape_rules") or []
         self._row_computed = _ensure_mapping_mixed(self._raw.get("row_computed"))
         self._totals_math = _ensure_mapping_mixed(self._raw.get("totals_math"))
@@ -526,6 +527,54 @@ class ContractAdapter:
         logger.info("pre_aggregate applied: %s → %d rows", strategy, len(df))
         return df
 
+    def _apply_group_aggregate_df(self, df):
+        """Aggregate across all batches (e.g. sum) to collapse N batch rows → 1 row.
+
+        Reads ``group_aggregate`` from the contract:
+          strategy – "sum" (only supported strategy currently)
+          columns  – list of columns to aggregate
+        Non-aggregated columns keep first row values.
+        """
+        import pandas as pd
+
+        ga = self._group_aggregate
+        strategy = ga.get("strategy", "")
+        agg_columns = ga.get("columns", [])
+
+        if not strategy or not agg_columns or df.empty:
+            return df
+
+        if strategy == "sum":
+            # Resolve actual column names in the DataFrame
+            agg_map = {}
+            for col in agg_columns:
+                actual = self._resolve_df_col(df, col)
+                if actual:
+                    agg_map[actual] = "sum"
+
+            if not agg_map:
+                return df
+
+            # Coerce aggregation columns to numeric
+            for col in agg_map:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+            # Build aggregation dict: sum for specified cols, first for everything else
+            full_agg = {}
+            for col in df.columns:
+                if col in agg_map:
+                    full_agg[col] = "sum"
+                else:
+                    full_agg[col] = "first"
+
+            result = df.groupby(lambda _: 0, sort=False).agg(full_agg)
+            result = result.reset_index(drop=True)
+            logger.info("group_aggregate applied: %s → %d rows (from %d)", strategy, len(result), len(df))
+            return result
+
+        logger.warning("group_aggregate strategy %r not supported, skipping", strategy)
+        return df
+
     @staticmethod
     def _resolve_df_col(df, col: str) -> str | None:
         """Resolve a column name against a DataFrame, stripping table prefix
@@ -821,6 +870,10 @@ class ContractAdapter:
         if self._pre_aggregate:
             df = self._apply_pre_aggregate_df(df)
 
+        # Apply group_aggregate (sum across batches → single row)
+        if self._group_aggregate:
+            df = self._apply_group_aggregate_df(df)
+
         # Apply reshape rules if present
         melt_alias_set: set[str] = set()
         if self._reshape_rules:
@@ -898,7 +951,11 @@ class ContractAdapter:
                 })
                 result_cols[tok] = ""
 
-        result_df = pd.DataFrame(result_cols)
+        try:
+            result_df = pd.DataFrame(result_cols)
+        except ValueError:
+            # All scalar values (e.g. every token unresolved → "") — wrap in list
+            result_df = pd.DataFrame({k: [v] for k, v in result_cols.items()})
 
         # Carry forward __batch_idx__ and metadata columns for BLOCK_REPEAT grouping
         if melt_alias_set and "__batch_idx__" in df.columns:

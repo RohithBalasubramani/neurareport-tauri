@@ -161,8 +161,23 @@ class RequestTimeoutMiddleware:
             return
 
         path = scope.get("path", "")
+        method = scope.get("method", "GET")
         timeout = self.timeout_seconds
-        if "/stream" in path or "/upload" in path or "/discover" in path:
+
+        # Long-running endpoints get doubled timeout (300s → 600s).
+        # Covers: report generation, discovery, AI/LLM, export, ingestion,
+        # agents, synthesis, document AI, workflows, and streaming.
+        _SLOW_FRAGMENTS = (
+            "/stream", "/upload", "/discover",
+            "/reports/run", "/jobs/run-report",
+            "/excel/reports/run", "/generate-docx",
+            "/export/", "/ingestion/",
+            "/ai/", "/docqa/", "/docai/",
+            "/synthesis/", "/nl2sql/",
+            "/agents/", "/workflows/",
+            "/enrichment/enrich", "/summary/generate",
+        )
+        if any(frag in path for frag in _SLOW_FRAGMENTS):
             timeout = timeout * 2
 
         try:

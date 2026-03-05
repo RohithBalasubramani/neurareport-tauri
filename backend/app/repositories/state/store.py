@@ -648,6 +648,28 @@ class StateStore:
     # ------------------------------------------------------------------
     # template helpers
     # ------------------------------------------------------------------
+    def prune_stale_templates(self, pdf_root: "Path", excel_root: "Path") -> int:
+        """Remove template entries whose directories no longer exist on disk."""
+        from pathlib import Path
+        removed = 0
+        with self._lock:
+            state = self._read_state()
+            templates = state.get("templates") or {}
+            stale_ids = []
+            for tid, rec in templates.items():
+                kind = str(rec.get("kind") or rec.get("template_type") or "pdf").lower()
+                base = excel_root if kind == "excel" else pdf_root
+                tdir = Path(base) / tid
+                if not tdir.exists():
+                    stale_ids.append(tid)
+            if stale_ids:
+                for tid in stale_ids:
+                    del templates[tid]
+                state["templates"] = templates
+                self._write_state(state)
+                removed = len(stale_ids)
+        return removed
+
     def list_templates(self) -> list[dict]:
         with self._lock:
             state = self._read_state()

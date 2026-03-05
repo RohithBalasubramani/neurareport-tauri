@@ -176,6 +176,15 @@ async def lifespan(app: FastAPI):
     if SCHEDULER and not SCHEDULER_DISABLED:
         await SCHEDULER.start()
 
+    # Prune state entries for templates whose directories no longer exist
+    try:
+        from backend.app.repositories.state import state_store
+        pruned = state_store.prune_stale_templates(UPLOAD_ROOT, EXCEL_UPLOAD_ROOT)
+        if pruned:
+            logger.info("stale_templates_pruned", extra={"event": "stale_templates_pruned", "count": pruned})
+    except Exception as exc:
+        logger.warning("template_prune_failed", extra={"event": "template_prune_failed", "error": str(exc)})
+
     recover_jobs = os.getenv("NEURA_RECOVER_JOBS_ON_STARTUP", "true").lower() in {"1", "true", "yes"}
     if recover_jobs:
         try:

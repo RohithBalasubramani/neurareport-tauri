@@ -781,11 +781,23 @@ def fill_and_print(
             if base in cf:
                 return cf[base]
 
-        # 4. Date derivation: batch_date → date portion of start_time/end_time
+        # 3b. Timestamp column fallback: start_time → timestamp_utc
+        if tok_low in ("start_time",) and "timestamp_utc" in cf:
+            ts = str(cf["timestamp_utc"])
+            # Extract time portion from ISO timestamp (e.g. "2026-02-26T13:41:26+05:30" → "13:41:26+05:30")
+            if "T" in ts:
+                return ts.split("T", 1)[1]
+            if " " in ts:
+                return ts.split(" ", 1)[1]
+            return ts
+
+        # 4. Date derivation: batch_date → date portion of start_time/end_time/timestamp_utc
         if "date" in tok_low:
-            for dt_col in ("start_time", "end_time"):
+            for dt_col in ("start_time", "end_time", "timestamp_utc"):
                 if dt_col in cf:
                     dt_str = str(cf[dt_col])
+                    if "T" in dt_str:
+                        return dt_str.split("T")[0]
                     if " " in dt_str:
                         return dt_str.split(" ")[0]
                     return dt_str

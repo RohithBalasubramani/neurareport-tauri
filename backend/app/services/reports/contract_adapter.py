@@ -175,6 +175,7 @@ class ContractAdapter:
         self._required_filters = _ensure_mapping(filters.get("required"))
         self._optional_filters = _ensure_mapping(filters.get("optional"))
 
+        self._pre_aggregate = self._raw.get("pre_aggregate") or {}
         self._reshape_rules = self._raw.get("reshape_rules") or []
         self._row_computed = _ensure_mapping_mixed(self._raw.get("row_computed"))
         self._totals_math = _ensure_mapping_mixed(self._raw.get("totals_math"))
@@ -470,6 +471,42 @@ class ContractAdapter:
             mask = mask & series.isin(normalized)
         return df.loc[mask.fillna(False)]
 
+    def _apply_pre_aggregate_df(self, df):
+        """Collapse time-series into one row per batch (first_per_run strategy).
+
+        Reads ``pre_aggregate`` from the contract:
+          batch_column   – column that identifies the batch (e.g. OIL_BACTH_COUNT)
+          timestamp_column – used for ordering within each batch
+          strategy       – currently only "first_per_run"
+          skip_value     – batch_column value to exclude (e.g. 0)
+        """
+        pa = self._pre_aggregate
+        batch_col = pa.get("batch_column", "")
+        ts_col = pa.get("timestamp_column", "")
+        strategy = pa.get("strategy", "")
+        skip_value = pa.get("skip_value")
+
+        if not batch_col or batch_col not in df.columns:
+            return df
+        if df.empty:
+            return df
+
+        # Filter out rows matching skip_value
+        if skip_value is not None:
+            mask = df[batch_col].astype(str).str.strip() != str(skip_value).strip()
+            df = df.loc[mask]
+            if df.empty:
+                return df
+
+        if strategy == "first_per_run":
+            # Sort by timestamp if available, then keep first row per batch
+            if ts_col and ts_col in df.columns:
+                df = df.sort_values(ts_col, ascending=True)
+            df = df.drop_duplicates(subset=[batch_col], keep="first")
+
+        logger.info("pre_aggregate applied: %s → %d rows", strategy, len(df))
+        return df
+
     @staticmethod
     def _resolve_df_col(df, col: str) -> str | None:
         """Resolve a column name against a DataFrame, stripping table prefix
@@ -747,6 +784,10 @@ class ContractAdapter:
         # Apply value filters
         if value_filters:
             df = self._apply_value_filters_df(df, value_filters)
+
+        # Apply pre_aggregate (collapse time-series into one row per batch)
+        if self._pre_aggregate:
+            df = self._apply_pre_aggregate_df(df)
 
         # Apply reshape rules if present
         melt_alias_set: set[str] = set()

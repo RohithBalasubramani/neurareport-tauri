@@ -1082,7 +1082,7 @@ def fill_and_print(
             return fixed_sql if fixed_sql != sql_text else None
 
         frames = df_loader.frames()
-        query_engine = DuckDBDataFrameQuery(frames)
+        query_engine = DuckDBDataFrameQuery(frames, loader=df_loader)
         try:
             results: dict[str, list[dict[str, object]]] = {}
             for name in ("header", "rows", "totals"):
@@ -1444,8 +1444,32 @@ def fill_and_print(
 
     generator_results: dict[str, list[dict[str, object]]] | None = None
 
-    # --- DataFrame pipeline ---
-    if not multi_key_selected:
+    # --- SQL entrypoints via DuckDB DataFrames ---
+    if GENERATOR_BUNDLE and isinstance(GENERATOR_BUNDLE.get("meta"), dict):
+        _entrypoints = GENERATOR_BUNDLE["meta"].get("entrypoints")
+        if _entrypoints and isinstance(_entrypoints, dict) and any(
+            _entrypoints.get(k) for k in ("header", "rows", "totals")
+        ):
+            try:
+                generator_results = _run_generator_entrypoints(
+                    _entrypoints, sql_params, dataframe_loader
+                )
+                if not any(generator_results.get(s) for s in ("header", "rows", "totals")):
+                    logger.warning("SQL entrypoints returned empty; falling back to contract pipeline")
+                    generator_results = None
+                else:
+                    logger.info(
+                        "SQL entrypoints succeeded: header=%d rows=%d totals=%d",
+                        len(generator_results.get("header", [])),
+                        len(generator_results.get("rows", [])),
+                        len(generator_results.get("totals", [])),
+                    )
+            except Exception as exc:
+                logger.warning("SQL entrypoints failed; falling back to contract pipeline: %s", exc, exc_info=True)
+                generator_results = None
+
+    # --- DataFrame pipeline (contract-based fallback) ---
+    if generator_results is None and not multi_key_selected:
         try:
             from .dataframe_pipeline import DataFramePipeline
 

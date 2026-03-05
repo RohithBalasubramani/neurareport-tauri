@@ -214,6 +214,12 @@ _DATE_NOW_RE = re.compile(r"""(?ix)\bDATE\s*\(\s*'now'\s*\)""")
 _DATE_NOW_MODIFIER_RE = re.compile(
     r"""(?ix)\bDATE\s*\(\s*'now'\s*,\s*'([+-]?\s*\d+)\s+(seconds?|minutes?|hours?|days?|months?|years?)'\s*\)"""
 )
+# Match datetime(expr, '+/-N unit') for arbitrary expressions (not just 'now').
+_DATETIME_GENERAL_MODIFIER_RE = re.compile(
+    r"(?i)\bdatetime\s*\(\s*((?:[^()]*|\([^()]*\))*?)\s*,\s*'([+-]?\s*\d+)\s+(seconds?|minutes?|hours?|days?|months?|years?)'\s*\)"
+)
+# Match date(expr) function calls (not DATE('now') which is handled above).
+_SQLITE_DATE_FUNC_RE = re.compile(r"(?i)(?<!sqlite_)\bdate\s*\(")
 
 
 def _normalize_params(sql: str, params: Any | None) -> tuple[str, Sequence[Any]]:
@@ -272,6 +278,18 @@ def _rewrite_date_modifier(m: re.Match) -> str:
         return f"(CURRENT_DATE - INTERVAL '{-amount}' {unit})"
 
 
+def _rewrite_datetime_general_modifier(m: re.Match) -> str:
+    """Convert datetime(expr, '+/-N unit') to DuckDB interval arithmetic."""
+    expr = m.group(1).strip()
+    raw_amount = m.group(2).replace(" ", "")
+    unit = _normalize_unit(m.group(3))
+    amount = int(raw_amount)
+    if amount >= 0:
+        return f"(TRY_CAST({expr} AS TIMESTAMP) + INTERVAL '{amount}' {unit})"
+    else:
+        return f"(TRY_CAST({expr} AS TIMESTAMP) - INTERVAL '{-amount}' {unit})"
+
+
 def _rewrite_sql(sql: str) -> str:
     """Apply lightweight rewrites so legacy SQLite SQL runs in DuckDB."""
     # First, rewrite multi-arg datetime/DATE patterns to DuckDB interval syntax.
@@ -279,6 +297,14 @@ def _rewrite_sql(sql: str) -> str:
     updated = _DATETIME_START_OF_RE.sub(_rewrite_start_of, updated)
     updated = _DATE_NOW_MODIFIER_RE.sub(_rewrite_date_modifier, updated)
     updated = _DATE_NOW_RE.sub("CURRENT_DATE", updated)
+    # Rewrite general datetime(expr, '+/-N unit') for non-'now' expressions.
+    for _ in range(5):
+        new = _DATETIME_GENERAL_MODIFIER_RE.sub(_rewrite_datetime_general_modifier, updated)
+        if new == updated:
+            break
+        updated = new
+    # Rewrite date(expr) → sqlite_date(expr) for non-'now' date function calls.
+    updated = _SQLITE_DATE_FUNC_RE.sub("sqlite_date(", updated)
     # Then rewrite any remaining single-arg datetime/strftime to shim macros.
     updated = _SQLITE_DATETIME_RE.sub("sqlite_datetime(", updated)
     updated = _SQLITE_STRFTIME_RE.sub("sqlite_strftime(", updated)
@@ -360,6 +386,9 @@ class DuckDBDataFrameQuery:
         # would shadow DuckDB's built-in, causing infinite recursion.
         # The _rewrite_sql() regex already converts strftime( → sqlite_strftime(.
         self._conn.execute("CREATE MACRO IF NOT EXISTS datetime(x) AS sqlite_datetime(x)")
+        self._conn.execute(
+            "CREATE MACRO IF NOT EXISTS sqlite_date(x) AS TRY_CAST(x AS DATE)"
+        )
 
     def execute(self, sql: str, params: Any | None = None) -> pd.DataFrame:
         prepared_sql, ordered_params = _normalize_params(sql, params)

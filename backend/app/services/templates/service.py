@@ -220,13 +220,24 @@ class TemplateService:
                 artifacts = manifest.get("artifacts") or {}
                 template_name = ctx.name or f"Template {ctx.template_id[:6]}"
                 status = "approved" if (ctx.template_dir / "contract.json").exists() else "draft"
+                # Read mapping_keys from extracted zip if present
+                imported_keys: list[str] = []
+                mapping_keys_path = ctx.template_dir / "mapping_keys.json"
+                if mapping_keys_path.exists():
+                    try:
+                        import json as _json
+                        mk_data = _json.loads(mapping_keys_path.read_text(encoding="utf-8"))
+                        raw_keys = mk_data.get("keys", []) if isinstance(mk_data, dict) else []
+                        imported_keys = [k for k in raw_keys if isinstance(k, str) and k.strip()]
+                    except Exception:
+                        logger.warning("Failed to read mapping_keys.json during import for %s", ctx.template_id)
                 state_store.upsert_template(
                     ctx.template_id,
                     name=template_name,
                     status=status,
                     artifacts=artifacts,
                     connection_id=None,
-                    mapping_keys=[],
+                    mapping_keys=imported_keys,
                     template_type=ctx.kind,
                 )
 
@@ -406,6 +417,18 @@ class TemplateService:
             artifacts = manifest.get("artifacts") or {}
             status = "approved" if (target_dir / "contract.json").exists() else "draft"
 
+            # Read mapping_keys from copied files if present
+            dup_keys: list[str] = []
+            dup_mk_path = target_dir / "mapping_keys.json"
+            if dup_mk_path.exists():
+                try:
+                    import json as _json
+                    mk_data = _json.loads(dup_mk_path.read_text(encoding="utf-8"))
+                    raw_keys = mk_data.get("keys", []) if isinstance(mk_data, dict) else []
+                    dup_keys = [k for k in raw_keys if isinstance(k, str) and k.strip()]
+                except Exception:
+                    self.logger.warning("Failed to read mapping_keys.json during duplicate for %s", new_template_id)
+
             # Register the new template in state
             state_store.upsert_template(
                 new_template_id,
@@ -413,7 +436,7 @@ class TemplateService:
                 status=status,
                 artifacts=artifacts,
                 connection_id=None,
-                mapping_keys=[],
+                mapping_keys=dup_keys,
                 template_type=template_kind,
             )
 

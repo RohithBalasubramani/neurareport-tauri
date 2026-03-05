@@ -41,7 +41,15 @@ async def _convert(html_path: str, pdf_path: str, base_dir: str, pdf_scale: floa
     scale_value = max(0.1, min(float(scale_value), 2.0))
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch()
+        browser = await p.chromium.launch(
+            args=[
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-software-rasterizer",
+            ]
+        )
         context = await browser.new_context(base_url=base_url)
         try:
             page = await context.new_page()
@@ -56,12 +64,17 @@ async def _convert(html_path: str, pdf_path: str, base_dir: str, pdf_scale: floa
                 landscape=True,
                 print_background=True,
                 margin={"top": "10mm", "right": "10mm", "bottom": "10mm", "left": "10mm"},
-                prefer_css_page_size=True,
                 scale=scale_value,
+                timeout=_PDF_RENDER_TIMEOUT_MS,
             )
         finally:
             await context.close()
             await browser.close()
+
+
+def convert_sync(html_path: str, pdf_path: str, base_dir: str, pdf_scale: float | None = None) -> None:
+    """Sync wrapper for multiprocessing — runs _convert in a fresh event loop."""
+    asyncio.run(_convert(html_path, pdf_path, base_dir, pdf_scale))
 
 
 def main() -> None:

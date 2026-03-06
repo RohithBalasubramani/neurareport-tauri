@@ -73,12 +73,11 @@ async def _convert(html_path: str, pdf_path: str, base_dir: str, pdf_scale: floa
 
 def convert_sync(html_path: str, pdf_path: str, base_dir: str, pdf_scale: float | None = None) -> None:
     """Sync wrapper for multiprocessing — runs _convert in a fresh event loop."""
-    # Multiprocessing child may inherit closed stdio from Tauri's Stdio::piped().
-    # Reopen to devnull to prevent 'NoneType' has no attribute 'write' errors.
-    if sys.stdout is None:
-        sys.stdout = open(os.devnull, "w")
-    if sys.stderr is None:
-        sys.stderr = open(os.devnull, "w")
+    # Multiprocessing child may inherit closed stdio from Tauri's Stdio::piped(),
+    # or cp1252-encoded streams on Windows that choke on Unicode (e.g. Playwright's
+    # box-drawing error messages).  Always redirect to devnull for safety.
+    sys.stdout = open(os.devnull, "w")
+    sys.stderr = open(os.devnull, "w")
     asyncio.run(_convert(html_path, pdf_path, base_dir, pdf_scale))
 
 

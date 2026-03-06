@@ -278,6 +278,54 @@ def _ensure_playwright_chromium(data_dir: Path):
         print("[DESKTOP] To fix manually: pip install playwright && playwright install chromium", flush=True)
 
 
+def _setup_playwright_browsers(data_dir: Path):
+    """Configure Playwright browser path, checking bundled copy first.
+
+    Priority:
+    1. Bundled browsers shipped alongside the .exe (CI pre-installed)
+    2. Previously-downloaded browsers in app-data dir
+    3. System-wide Playwright install
+    4. Background download (fallback)
+    """
+    # ---- Check 1: Bundled with the app (next to the exe) ----
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).parent
+    else:
+        exe_dir = Path(__file__).parent
+
+    bundled_dir = exe_dir / "playwright-browsers"
+    if _find_chromium_in_dir(bundled_dir):
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(bundled_dir)
+        print(f"[DESKTOP] Using BUNDLED Chromium from {bundled_dir}", flush=True)
+        return
+
+    # ---- Check 2: Already in app-data dir (previous download) ----
+    browsers_dir = data_dir / "playwright-browsers"
+    browsers_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers_dir)
+
+    if _find_chromium_in_dir(browsers_dir):
+        print("[DESKTOP] Playwright Chromium found in app data", flush=True)
+        return
+
+    # ---- Check 3: System-wide install ----
+    system_dir = _find_system_chromium()
+    if system_dir:
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(system_dir)
+        print(f"[DESKTOP] Using system Chromium at {system_dir}", flush=True)
+        return
+
+    # ---- Fallback: Download in background thread ----
+    print("[DESKTOP] No bundled Chromium found, downloading in background...", flush=True)
+    import threading
+    threading.Thread(
+        target=_ensure_playwright_chromium,
+        args=(data_dir,),
+        daemon=True,
+        name="playwright-install",
+    ).start()
+
+
 def main():
     # Required for multiprocessing in PyInstaller frozen executables on Windows.
     # pdf2docx uses multiprocessing for parallel page conversion; without this
@@ -333,16 +381,9 @@ def main():
         f"sqlite+aiosqlite:///{data_dir / 'state' / 'neurareport.db'}",
     )
 
-    # Download Playwright Chromium in a background thread so the server
-    # starts immediately and passes Tauri's health-check.  PDF generation
-    # will be unavailable until the download finishes (HTML/XLSX still work).
-    import threading
-    threading.Thread(
-        target=_ensure_playwright_chromium,
-        args=(data_dir,),
-        daemon=True,
-        name="playwright-install",
-    ).start()
+    # Configure Playwright Chromium: bundled copy first, then app-data/system,
+    # then background download as last resort.
+    _setup_playwright_browsers(data_dir)
 
     # Clean stale file locks from previous crashes
     _clean_stale_locks(data_dir)

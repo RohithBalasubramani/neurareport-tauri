@@ -86,11 +86,18 @@ class ConnectionService:
                 if verify:
                     self.repo.verify(path)
                 return path
+            except FileNotFoundError as exc:
+                logger.warning("connection_resolve_failed: %s", exc)
+                raise AppError(
+                    code="file_not_found",
+                    message=f"Database file not found: {exc}",
+                    status_code=400,
+                )
             except Exception as exc:
+                logger.warning("connection_verify_failed: %s", exc)
                 raise AppError(
                     code="invalid_database",
-                    message="Invalid or unreachable database",
-                    detail=None,
+                    message=f"Invalid or unreachable database: {exc}",
                     status_code=400,
                 )
         else:

@@ -541,7 +541,10 @@ class ContractAdapter:
         strategy = ga.get("strategy", "")
         agg_columns = ga.get("columns", [])
 
-        if not strategy or not agg_columns or df.empty:
+        if not strategy or df.empty:
+            return df
+
+        if strategy != "group_by" and not agg_columns:
             return df
 
         if strategy == "sum":
@@ -569,6 +572,59 @@ class ContractAdapter:
 
             result = df.groupby(lambda _: 0, sort=False).agg(full_agg)
             result = result.reset_index(drop=True)
+            logger.info("group_aggregate applied: %s → %d rows (from %d)", strategy, len(result), len(df))
+            return result
+
+        if strategy == "group_by":
+            # Group by specified column(s), aggregate others, add count column.
+            # Contract: group_columns (list), aggregations (dict col→func), count_as (str)
+            group_columns = ga.get("group_columns", [])
+            aggregations = ga.get("aggregations", {})
+            count_as = ga.get("count_as", "__count__")
+
+            if not group_columns:
+                logger.warning("group_by strategy missing group_columns, skipping")
+                return df
+
+            # Resolve actual column names
+            resolved_groups = []
+            for gc in group_columns:
+                actual = self._resolve_df_col(df, gc)
+                if actual:
+                    resolved_groups.append(actual)
+                elif gc in df.columns:
+                    resolved_groups.append(gc)
+
+            if not resolved_groups:
+                logger.warning("group_by: none of %s found in DataFrame", group_columns)
+                return df
+
+            # Build aggregation map
+            agg_map = {}
+            for col, func in aggregations.items():
+                actual = self._resolve_df_col(df, col) or col
+                if actual in df.columns:
+                    if func == "min":
+                        df[actual] = pd.to_numeric(df[actual], errors="coerce")
+                    agg_map[actual] = func
+
+            # Default: first for all non-group columns not in aggregations
+            full_agg = {}
+            for col in df.columns:
+                if col in resolved_groups:
+                    continue
+                if col in agg_map:
+                    full_agg[col] = agg_map[col]
+                else:
+                    full_agg[col] = "first"
+
+            result = df.groupby(resolved_groups, sort=True).agg(full_agg)
+
+            # Add count column
+            counts = df.groupby(resolved_groups, sort=True).size()
+            result[count_as] = counts.values
+
+            result = result.reset_index()
             logger.info("group_aggregate applied: %s → %d rows (from %d)", strategy, len(result), len(df))
             return result
 
@@ -700,6 +756,17 @@ class ContractAdapter:
             if resolved:
                 return df[resolved].round(decimals)
             return 0
+        elif op == "format_hms":
+            col = op_spec.get("column", "")
+            resolved = self._resolve_df_col(df, col)
+            if resolved:
+                total_sec = int(pd.to_numeric(df[resolved], errors="coerce").sum())
+            else:
+                total_sec = 0
+            h, rem = divmod(abs(total_sec), 3600)
+            m, s = divmod(rem, 60)
+            sign = "-" if total_sec < 0 else ""
+            return f"{sign}{h}:{m:02d}:{s:02d}"
         else:
             logger.warning("unknown_declarative_op", extra={"op": op})
             return None
@@ -878,12 +945,16 @@ class ContractAdapter:
         melt_alias_set: set[str] = set()
         if self._reshape_rules:
             df = self._apply_reshape_df(df, loader, source_table)
-            # Build set of MELT alias column names for fallback resolution
+            # Build set of reshape alias column names for fallback resolution
             for rule in self._reshape_rules:
                 for col_spec in rule.get("columns", []):
                     alias = col_spec.get("as", "")
                     if alias:
                         melt_alias_set.add(alias)
+                # WINDOW_DIFF produces output_columns directly
+                for out_col in rule.get("output_columns", []):
+                    if out_col:
+                        melt_alias_set.add(out_col)
 
         # Build result with mapped columns.
         # Add computed columns back to df so subsequent computations can reference them.
@@ -907,7 +978,12 @@ class ContractAdapter:
                     except Exception:
                         pass
 
-            # 1b. Direct column match (MELT alias IS the token name)
+            # 1b. INDEX mapping → 1-based serial number
+            if not resolved and self._mapping.get(tok) == "INDEX":
+                result_cols[tok] = list(range(1, len(df) + 1))
+                resolved = True
+
+            # 1c. Direct column match (MELT alias IS the token name)
             if not resolved and tok in df.columns:
                 result_cols[tok] = df[tok].values
                 resolved = True
@@ -1123,7 +1199,131 @@ class ContractAdapter:
                         mask = mask & (str_vals != "") & (str_vals.str.lower() != "nan") & (str_vals.str.lower() != "none")
                         df = df.loc[mask].reset_index(drop=True)
 
+            elif strategy == "WINDOW_DIFF":
+                # Detect run intervals from cumulative counter changes.
+                # column_groups: [{machine_name, columns: [HRS, MIN, SEC]}]
+                # Produces rows: machine_name, run_date, start_time, end_time, duration_sec, shift_no, total_time
+                df = self._apply_window_diff(df, rule, loader)
+
         return df
+
+    def _apply_window_diff(self, df, rule: dict, loader) -> "pd.DataFrame":
+        """Detect machine run intervals from RUNHOURS cumulative counters."""
+        import pandas as pd
+        import numpy as np
+        from datetime import datetime, timedelta
+
+        column_groups = rule.get("column_groups", [])
+        ts_col = rule.get("timestamp_column", "timestamp_utc")
+        shift_boundaries = rule.get("shift_boundaries", {})
+
+        if df.empty or not column_groups:
+            return pd.DataFrame()
+
+        # Ensure sorted by timestamp
+        if ts_col in df.columns:
+            df = df.sort_values(ts_col).reset_index(drop=True)
+
+        intervals = []
+        for group in column_groups:
+            machine_name = group.get("machine_name", "")
+            cols = group.get("columns", [])
+            if not cols or not all(c in df.columns for c in cols):
+                continue
+
+            # Coerce to numeric
+            for c in cols:
+                df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+
+            # Build composite value: HRS*3600 + MIN*60 + SEC
+            composite = df[cols[0]] * 3600
+            if len(cols) > 1:
+                composite = composite + df[cols[1]] * 60
+            if len(cols) > 2:
+                composite = composite + df[cols[2]]
+
+            # Detect changes: where composite value differs from previous
+            diffs = composite.diff().fillna(0)
+            is_changing = diffs != 0
+
+            # Find intervals where machine is running (consecutive changing rows)
+            timestamps = pd.to_datetime(df[ts_col], errors="coerce")
+            run_start = None
+
+            for idx in range(len(df)):
+                if is_changing.iloc[idx]:
+                    if run_start is None:
+                        # Start of a run interval — use PREVIOUS timestamp as start
+                        run_start = idx - 1 if idx > 0 else idx
+                else:
+                    if run_start is not None:
+                        # End of run interval
+                        start_ts = timestamps.iloc[run_start]
+                        end_ts = timestamps.iloc[idx - 1] if idx > 0 else timestamps.iloc[idx]
+                        if pd.notna(start_ts) and pd.notna(end_ts):
+                            dur = int((end_ts - start_ts).total_seconds())
+                            if dur > 0:
+                                intervals.append(self._make_interval_row(
+                                    machine_name, start_ts, end_ts, dur, shift_boundaries
+                                ))
+                        run_start = None
+
+            # Close open interval at end
+            if run_start is not None:
+                start_ts = timestamps.iloc[run_start]
+                end_ts = timestamps.iloc[len(df) - 1]
+                if pd.notna(start_ts) and pd.notna(end_ts):
+                    dur = int((end_ts - start_ts).total_seconds())
+                    if dur > 0:
+                        intervals.append(self._make_interval_row(
+                            machine_name, start_ts, end_ts, dur, shift_boundaries
+                        ))
+
+        if not intervals:
+            return pd.DataFrame(columns=[
+                "machine_name", "run_date", "start_time", "end_time",
+                "duration_sec", "shift_no", "total_time"
+            ])
+
+        result = pd.DataFrame(intervals)
+        logger.info("WINDOW_DIFF applied: %d intervals from %d machine groups", len(result), len(column_groups))
+        return result
+
+    @staticmethod
+    def _make_interval_row(machine_name, start_ts, end_ts, duration_sec, shift_boundaries):
+        """Create a single interval row dict."""
+        # Format times
+        run_date = start_ts.strftime("%Y-%m-%d")
+        start_time = start_ts.strftime("%H:%M:%S")
+        end_time = end_ts.strftime("%H:%M:%S")
+
+        # Format total_time as HH:MM:SS
+        hours = duration_sec // 3600
+        minutes = (duration_sec % 3600) // 60
+        seconds = duration_sec % 60
+        total_time = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+        # Determine shift number based on start_time hour
+        shift_no = ""
+        start_hour = start_ts.hour
+        if shift_boundaries:
+            if 6 <= start_hour < 14:
+                shift_no = "1"
+            elif 14 <= start_hour < 22:
+                shift_no = "2"
+            else:
+                shift_no = "3"
+
+        return {
+            "machine_name": machine_name,
+            "run_date": run_date,
+            "start_time": start_time,
+            "end_time": end_time,
+            "duration_sec": duration_sec,
+            "shift_no": shift_no,
+            "total_time": total_time,
+        }
+
 
     # ------------------------------------------------------------------ #
     # Internal helpers

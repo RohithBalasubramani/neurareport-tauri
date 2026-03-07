@@ -314,7 +314,7 @@ def fill_and_print(
                     _columns_cache[_tbl] = set(dataframe_loader.frame(_tbl).columns)
                 except Exception:
                     _columns_cache[_tbl] = set()
-            if _col not in _columns_cache[_tbl] and _col != "__rowid__":
+            if _col not in _columns_cache[_tbl] and not _col.startswith("__"):
                 _missing_refs.append(
                     f"  {_token!r} -> {_col_ref!r} (column {_col!r} not in table {_tbl!r})"
                 )
@@ -505,11 +505,11 @@ def fill_and_print(
         if not tokens:
             yield {}
             return
-        max_combos_raw = os.getenv("NEURA_REPORT_MAX_KEY_COMBINATIONS", "50")
+        max_combos_raw = os.getenv("NEURA_REPORT_MAX_KEY_COMBINATIONS", "500")
         try:
             max_combos = int(max_combos_raw)
         except ValueError:
-            max_combos = 50
+            max_combos = 500
         max_combos = max(1, max_combos)
         estimated = 1
         for values in value_lists:
@@ -690,6 +690,11 @@ def fill_and_print(
         counter_markers = ("serial", "sequence", "seq", "counter")
         if any(marker in normalized for marker in counter_markers):
             return True
+        # Exclude data fields that happen to end with counter-like suffixes
+        # (e.g. row_bin_no is a bin identifier, row_recipe_no is a recipe ref)
+        data_markers = ("bin", "recipe", "batch", "machine")
+        if any(marker in normalized for marker in data_markers):
+            return False
         counter_suffixes = (
             "slno",
             "srno",
@@ -920,7 +925,9 @@ def fill_and_print(
             _reindex_serial_fields(prepared, row_tokens_template, row_columns)
         return prepared
 
-    if multi_key_selected and not __force_single:
+    # Skip fanout when contract says to aggregate across batches
+    _has_group_aggregate = bool((OBJ.get("group_aggregate") or {}).get("strategy"))
+    if multi_key_selected and not __force_single and not _has_group_aggregate:
         html_sections: list[str] = []
         tmp_outputs: list[tuple[Path, Path]] = []
         try:
@@ -1505,7 +1512,7 @@ def fill_and_print(
     generator_results: dict[str, list[dict[str, object]]] | None = None
 
     # --- DataFrame pipeline ---
-    if not multi_key_selected:
+    if not multi_key_selected or _has_group_aggregate:
         try:
             from .dataframe_pipeline import DataFramePipeline
 

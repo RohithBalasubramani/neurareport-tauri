@@ -77,25 +77,8 @@ jobs:
           pip install -r backend/requirements-desktop.txt
           pip install pyinstaller
 
-      - name: Pre-install Playwright Chromium
-        shell: pwsh
-        run: |
-          $Env:PLAYWRIGHT_BROWSERS_PATH = "${{ github.workspace }}\playwright-browsers"
-          python -m playwright install chromium
-          $size = [math]::Round((Get-ChildItem "$Env:PLAYWRIGHT_BROWSERS_PATH" -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
-          Write-Host "Chromium installed: $size MB"
-
       - name: Build backend sidecar (PyInstaller)
         run: python -m PyInstaller backend/neurareport-backend.spec --distpath frontend/src-tauri/ --noconfirm --clean
-
-      - name: Bundle Chromium with sidecar
-        shell: pwsh
-        run: |
-          $src = "${{ github.workspace }}\playwright-browsers"
-          $dst = "frontend\src-tauri\neurareport-backend\playwright-browsers"
-          Copy-Item -Path $src -Destination $dst -Recurse -Force
-          $size = [math]::Round((Get-ChildItem $dst -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
-          Write-Host "Bundled Chromium: $size MB"
 
       - name: Verify sidecar output
         shell: pwsh
@@ -207,21 +190,8 @@ jobs:
           pip install -r backend/requirements-desktop.txt
           pip install pyinstaller
 
-      - name: Pre-install Playwright Chromium
-        run: |
-          export PLAYWRIGHT_BROWSERS_PATH="${{ github.workspace }}/playwright-browsers"
-          python -m playwright install chromium
-          echo "Chromium installed: $(du -sh "$PLAYWRIGHT_BROWSERS_PATH" | cut -f1)"
-
       - name: Build backend sidecar (PyInstaller)
         run: python -m PyInstaller backend/neurareport-backend.spec --distpath frontend/src-tauri/ --noconfirm --clean
-
-      - name: Bundle Chromium with sidecar
-        run: |
-          src="${{ github.workspace }}/playwright-browsers"
-          dst="frontend/src-tauri/neurareport-backend/playwright-browsers"
-          cp -r "$src" "$dst"
-          echo "Bundled Chromium: $(du -sh "$dst" | cut -f1)"
 
       - name: Resolve symlinks in sidecar
         run: |

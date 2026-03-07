@@ -49,56 +49,33 @@ def _clean_stale_locks(data_dir: Path):
         print(f"[DESKTOP] Cleaned {cleaned} stale lock file(s) from previous session", flush=True)
 
 
-_SMTP_DEFAULTS = {
-    "host": "smtp.gmail.com",
-    "port": 587,
-    "sender": "rohith@neuract.in",
-    "username": "rohith@neuract.in",
-    "password": "phhd dkzq gpou njfh",
-    "use_tls": True,
-}
-
-
-def _preseed_smtp_json(state_dir: Path):
-    """Write SMTP defaults into state.json BEFORE app import.
-
-    On a brand-new install the SQLite migration reads state.json to build the
-    initial snapshot.  By writing here we ensure SMTP is present from the start.
-    """
+def _seed_smtp_defaults(state_dir: Path):
+    """Seed SMTP settings into the state store on first run."""
     import json
     state_path = state_dir / "state.json"
     try:
-        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
-        smtp = state.get("user_preferences", {}).get("smtp", {})
-        if not smtp.get("host"):
-            state.setdefault("user_preferences", {})["smtp"] = dict(_SMTP_DEFAULTS)
-            state_path.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
-            print("[DESKTOP] Pre-seeded SMTP into state.json", flush=True)
-    except Exception as e:
-        print(f"[DESKTOP] state.json pre-seed skipped: {e}", flush=True)
-
-
-def _seed_smtp_via_store_api():
-    """Seed SMTP defaults using the state store API (same path as the rest of the app).
-
-    Must be called AFTER ``from backend.api import app`` so that the state store
-    (SQLite tables, proxy, etc.) is fully initialised.
-    """
-    try:
-        from backend.app.services.state_access import get_user_preferences, set_user_preference
-        prefs = get_user_preferences()
+        if state_path.exists():
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        else:
+            state = {}
+        prefs = state.get("user_preferences", {})
         smtp = prefs.get("smtp", {})
         if smtp.get("host"):
-            print(f"[DESKTOP] SMTP already configured: host={smtp['host']}", flush=True)
-        else:
-            set_user_preference("smtp", dict(_SMTP_DEFAULTS))
-            print("[DESKTOP] Seeded SMTP defaults via state store API", flush=True)
-
-        from backend.app.services.utils.mailer import refresh_mailer_config
-        cfg = refresh_mailer_config()
-        print(f"[DESKTOP] Mailer ready: enabled={cfg.enabled}, host={cfg.host}", flush=True)
+            return  # Already configured
+        # Seed with default SMTP config
+        prefs["smtp"] = {
+            "host": "smtp.gmail.com",
+            "port": 587,
+            "sender": "rohith@neuract.in",
+            "username": "rohith@neuract.in",
+            "password": "phhd dkzq gpou njfh",
+            "use_tls": True,
+        }
+        state["user_preferences"] = prefs
+        state_path.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
+        print("[DESKTOP] Seeded default SMTP settings", flush=True)
     except Exception as e:
-        print(f"[DESKTOP] SMTP seed/refresh failed: {e}", flush=True)
+        print(f"[DESKTOP] SMTP seed skipped: {e}", flush=True)
 
 
 def _find_chromium_in_dir(d: Path) -> bool:
@@ -108,6 +85,40 @@ def _find_chromium_in_dir(d: Path) -> bool:
     for pattern in ["chromium-*", "chromium_*"]:
         for entry in d.glob(pattern):
             if entry.is_dir():
+                return True
+    return False
+
+
+def _has_system_browser() -> bool:
+    """Check if Chrome or Edge is installed on the system.
+
+    If a system browser exists, Playwright can use it directly via the
+    `channel` parameter — no Chromium download needed.
+    """
+    if platform.system() == "Windows":
+        # Edge is pre-installed on all Windows 10/11 machines
+        edge_paths = [
+            Path(os.environ.get("PROGRAMFILES", "C:\\Program Files")) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+            Path(os.environ.get("PROGRAMFILES(X86)", "C:\\Program Files (x86)")) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+        ]
+        chrome_paths = [
+            Path(os.environ.get("PROGRAMFILES", "C:\\Program Files")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+            Path(os.environ.get("PROGRAMFILES(X86)", "C:\\Program Files (x86)")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+        ]
+        for p in edge_paths + chrome_paths:
+            if p.exists():
+                print(f"[DESKTOP] Found system browser: {p.name}", flush=True)
+                return True
+    elif platform.system() == "Darwin":
+        for app in ["/Applications/Google Chrome.app", "/Applications/Microsoft Edge.app"]:
+            if Path(app).exists():
+                return True
+    else:
+        import shutil
+        for cmd in ["google-chrome", "google-chrome-stable", "microsoft-edge", "chromium-browser", "chromium"]:
+            if shutil.which(cmd):
                 return True
     return False
 
@@ -146,19 +157,31 @@ def _ensure_node_executable(node_path: str) -> None:
 
 
 def _ensure_playwright_chromium(data_dir: Path):
-    """Install Playwright Chromium browser if not present.
+    """Ensure a Chromium-based browser is available for PDF generation.
 
-    Strategy:
-    1. Set PLAYWRIGHT_BROWSERS_PATH to a fixed app-data location (avoids
-       all system path and "wrong machine" issues).
-    2. Check if Chromium is already there.
-    3. Check if Chromium exists in a system location — if so, reuse it.
-    4. If not found anywhere, download via the bundled Playwright driver,
-       falling back to system Python or npx.
+    Strategy (fastest to slowest):
+    0. Check for system Chrome/Edge — if found, no download needed at all.
+       The _pdf_worker uses channel="msedge"/"chrome" to launch them directly.
+    1. Set PLAYWRIGHT_BROWSERS_PATH to a fixed app-data location.
+    2. Check if Playwright Chromium is already there.
+    3. Check if Chromium exists in a system Playwright location — reuse it.
+    4. Download via bundled Playwright driver / system Python / npx.
     5. Verify the install by checking the directory exists.
 
     Falls back gracefully — PDF generation is skipped if unavailable.
     """
+    # ---- Check 0: system Chrome/Edge available? ----
+    # If so, _pdf_worker will use channel="msedge"/"chrome" directly.
+    # No Playwright Chromium download needed at all.
+    if _has_system_browser():
+        print("[DESKTOP] System browser available — skipping Chromium download", flush=True)
+        # Still set PLAYWRIGHT_BROWSERS_PATH to prevent Playwright's PyInstaller
+        # detection from setting it to "0"
+        browsers_dir = data_dir / "playwright-browsers"
+        browsers_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers_dir)
+        return
+
     browsers_dir = data_dir / "playwright-browsers"
     browsers_dir.mkdir(parents=True, exist_ok=True)
 
@@ -278,60 +301,23 @@ def _ensure_playwright_chromium(data_dir: Path):
         print("[DESKTOP] To fix manually: pip install playwright && playwright install chromium", flush=True)
 
 
-def _setup_playwright_browsers(data_dir: Path):
-    """Configure Playwright browser path, checking bundled copy first.
-
-    Priority:
-    1. Bundled browsers shipped alongside the .exe (CI pre-installed)
-    2. Previously-downloaded browsers in app-data dir
-    3. System-wide Playwright install
-    4. Background download (fallback)
-    """
-    # ---- Check 1: Bundled with the app (next to the exe) ----
-    if getattr(sys, "frozen", False):
-        exe_dir = Path(sys.executable).parent
-    else:
-        exe_dir = Path(__file__).parent
-
-    bundled_dir = exe_dir / "playwright-browsers"
-    if _find_chromium_in_dir(bundled_dir):
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(bundled_dir)
-        print(f"[DESKTOP] Using BUNDLED Chromium from {bundled_dir}", flush=True)
-        return
-
-    # ---- Check 2: Already in app-data dir (previous download) ----
-    browsers_dir = data_dir / "playwright-browsers"
-    browsers_dir.mkdir(parents=True, exist_ok=True)
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers_dir)
-
-    if _find_chromium_in_dir(browsers_dir):
-        print("[DESKTOP] Playwright Chromium found in app data", flush=True)
-        return
-
-    # ---- Check 3: System-wide install ----
-    system_dir = _find_system_chromium()
-    if system_dir:
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(system_dir)
-        print(f"[DESKTOP] Using system Chromium at {system_dir}", flush=True)
-        return
-
-    # ---- Fallback: Download in background thread ----
-    print("[DESKTOP] No bundled Chromium found, downloading in background...", flush=True)
-    import threading
-    threading.Thread(
-        target=_ensure_playwright_chromium,
-        args=(data_dir,),
-        daemon=True,
-        name="playwright-install",
-    ).start()
-
-
 def main():
     # Required for multiprocessing in PyInstaller frozen executables on Windows.
     # pdf2docx uses multiprocessing for parallel page conversion; without this
     # call the spawn start-method causes an infinite process loop.
     import multiprocessing
     multiprocessing.freeze_support()
+
+    # Handle --pdf-worker mode: when the frozen exe is invoked as a PDF
+    # subprocess, route directly to the PDF worker and exit.
+    if "--pdf-worker" in sys.argv:
+        idx = sys.argv.index("--pdf-worker")
+        # The JSON args follow --pdf-worker
+        worker_args = sys.argv[idx + 1:]
+        sys.argv = [sys.argv[0]] + worker_args
+        from app.services.reports._pdf_worker import main as pdf_main
+        pdf_main()
+        return
 
     parser = argparse.ArgumentParser(description="NeuraReport desktop backend")
     parser.add_argument("--port", type=int, default=8000, help="Port to listen on")
@@ -381,24 +367,19 @@ def main():
         f"sqlite+aiosqlite:///{data_dir / 'state' / 'neurareport.db'}",
     )
 
-    # Configure Playwright Chromium: bundled copy first, then app-data/system,
-    # then background download as last resort.
-    _setup_playwright_browsers(data_dir)
+    # Seed default SMTP settings if not already configured
+    _seed_smtp_defaults(data_dir / "state")
+
+    # Ensure Playwright Chromium is available for PDF generation
+    _ensure_playwright_chromium(data_dir)
 
     # Clean stale file locks from previous crashes
     _clean_stale_locks(data_dir)
-
-    # Pre-seed SMTP into state.json BEFORE app import so the SQLite first-run
-    # migration picks it up automatically (only matters for brand-new installs).
-    _preseed_smtp_json(data_dir / "state")
 
     # Direct import avoids string-based lookup issues with PyInstaller
     from backend.api import app  # noqa: E402
     import logging as _logging
     import uvicorn
-
-    # Seed default SMTP settings via state store API (safe after app import)
-    _seed_smtp_via_store_api()
 
     # Suppress noisy uvicorn access-log lines for high-frequency polling
     # endpoints (/api/v1/jobs, /health) that bloat the desktop log file.

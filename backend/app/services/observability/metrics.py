@@ -27,53 +27,33 @@ try:
 except ImportError:
     HAS_OTEL = False
 
-try:
-    from prometheus_client import Counter, Gauge, Histogram, Info, REGISTRY
-    from prometheus_client.openmetrics.exposition import CONTENT_TYPE_LATEST, generate_latest
-    HAS_PROMETHEUS = True
-except ImportError:
-    HAS_PROMETHEUS = False
+from prometheus_client import Counter, Gauge, Histogram, Info, REGISTRY
+from prometheus_client.openmetrics.exposition import CONTENT_TYPE_LATEST, generate_latest
 
 logger = logging.getLogger("neura.observability.metrics")
 
-if HAS_PROMETHEUS:
-    # ---- HTTP Metrics ----
-    REQUESTS_TOTAL = Counter("fastapi_requests_total", "Total requests", ["method", "path", "app_name"])
-    RESPONSES_TOTAL = Counter("fastapi_responses_total", "Total responses", ["method", "path", "status_code", "app_name"])
-    REQUESTS_DURATION = Histogram(
-        "fastapi_requests_duration_seconds", "Request duration",
-        ["method", "path", "app_name"],
-        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
-    )
-    EXCEPTIONS_TOTAL = Counter("fastapi_exceptions_total", "Exceptions", ["method", "path", "exception_type", "app_name"])
-    REQUESTS_IN_PROGRESS = Gauge("fastapi_requests_in_progress", "In-progress requests", ["method", "path", "app_name"])
+# ---- HTTP Metrics ----
+REQUESTS_TOTAL = Counter("fastapi_requests_total", "Total requests", ["method", "path", "app_name"])
+RESPONSES_TOTAL = Counter("fastapi_responses_total", "Total responses", ["method", "path", "status_code", "app_name"])
+REQUESTS_DURATION = Histogram(
+    "fastapi_requests_duration_seconds", "Request duration",
+    ["method", "path", "app_name"],
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+)
+EXCEPTIONS_TOTAL = Counter("fastapi_exceptions_total", "Exceptions", ["method", "path", "exception_type", "app_name"])
+REQUESTS_IN_PROGRESS = Gauge("fastapi_requests_in_progress", "In-progress requests", ["method", "path", "app_name"])
 
-    # ---- Business Metrics ----
-    REPORTS_GENERATED = Counter("neurareport_reports_generated_total", "Reports generated", ["report_type", "status"])
-    LLM_INFERENCE_DURATION = Histogram(
-        "neurareport_llm_inference_seconds", "LLM inference time",
-        ["model", "operation"],
-        buckets=(0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0),
-    )
-    LLM_TOKEN_USAGE = Counter("neurareport_llm_tokens_total", "LLM tokens consumed", ["model", "token_type"])
-    QUEUE_DEPTH = Gauge("neurareport_queue_depth", "Queue depth", ["queue_name"])
-    ACTIVE_WEBSOCKETS = Gauge("neurareport_active_websocket_connections", "WebSocket connections", ["connection_type"])
-    BUILD_INFO = Info("neurareport_build", "Build info")
-else:
-    class _NoOp:
-        def labels(self, *a, **kw): return self
-        def inc(self, *a, **kw): pass
-        def dec(self, *a, **kw): pass
-        def observe(self, *a, **kw): pass
-        def info(self, *a, **kw): pass
-        def set(self, *a, **kw): pass
-    REQUESTS_TOTAL = RESPONSES_TOTAL = EXCEPTIONS_TOTAL = _NoOp()
-    REQUESTS_DURATION = REQUESTS_IN_PROGRESS = _NoOp()
-    REPORTS_GENERATED = LLM_INFERENCE_DURATION = LLM_TOKEN_USAGE = _NoOp()
-    QUEUE_DEPTH = ACTIVE_WEBSOCKETS = BUILD_INFO = _NoOp()
-    REGISTRY = None
-    CONTENT_TYPE_LATEST = "text/plain"
-    def generate_latest(*a, **kw): return b""
+# ---- Business Metrics ----
+REPORTS_GENERATED = Counter("neurareport_reports_generated_total", "Reports generated", ["report_type", "status"])
+LLM_INFERENCE_DURATION = Histogram(
+    "neurareport_llm_inference_seconds", "LLM inference time",
+    ["model", "operation"],
+    buckets=(0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0),
+)
+LLM_TOKEN_USAGE = Counter("neurareport_llm_tokens_total", "LLM tokens consumed", ["model", "token_type"])
+QUEUE_DEPTH = Gauge("neurareport_queue_depth", "Queue depth", ["queue_name"])
+ACTIVE_WEBSOCKETS = Gauge("neurareport_active_websocket_connections", "WebSocket connections", ["connection_type"])
+BUILD_INFO = Info("neurareport_build", "Build info")
 
 
 def init_app_info(version: str = "dev", commit: str = "unknown", app_name: str = "neurareport-backend") -> None:

@@ -162,11 +162,24 @@ hidden_imports = _all_mods + [
 # --- Data files needed at runtime ---
 datas = []
 
-# Playwright driver (node binary + scripts) — needed for PDF generation
+# Playwright driver (node binary + scripts) — needed for PDF generation.
+# IMPORTANT: Exclude browser binaries (chromium, firefox, webkit) — they are
+# 400MB+ and cause NSIS extraction failures (antivirus blocks chrome.dll).
+# The desktop app uses system Chrome/Edge via channel="msedge"/"chrome" instead,
+# falling back to runtime download if no system browser is available.
 try:
     _pw_datas = collect_data_files('playwright', include_py_files=False)
+    # Filter out browser binaries — only keep the driver (node + CLI scripts)
+    _pw_datas = [
+        (src, dest) for src, dest in _pw_datas
+        if 'chromium' not in src.lower()
+        and 'firefox' not in src.lower()
+        and 'webkit' not in src.lower()
+        and 'playwright-browsers' not in src.lower()
+        and 'ms-playwright' not in src.lower()
+    ]
     datas.extend(_pw_datas)
-    print(f"[SPEC DEBUG] Playwright data files: {len(_pw_datas)} entries")
+    print(f"[SPEC DEBUG] Playwright data files (driver only): {len(_pw_datas)} entries")
 except Exception as e:
     print(f"[SPEC DEBUG] Playwright data collection skipped: {e}")
 

@@ -6,18 +6,8 @@ from typing import Any, Dict
 
 from fastapi import FastAPI
 
-try:
-    from .cost_tracker import CostTracker, get_cost_tracker
-except (ImportError, Exception):
-    CostTracker = None
-    get_cost_tracker = None
-
-try:
-    from .tracer import trace, SpanCollector, get_span_collector
-except (ImportError, Exception):
-    trace = None
-    SpanCollector = None
-    get_span_collector = None
+from .cost_tracker import CostTracker, get_cost_tracker
+from .tracer import trace, SpanCollector, get_span_collector
 
 logger = logging.getLogger("neura.observability")
 

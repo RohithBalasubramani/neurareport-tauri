@@ -5,12 +5,7 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 
-try:
-    import casbin
-    HAS_CASBIN = True
-except ImportError:
-    casbin = None
-    HAS_CASBIN = False
+import casbin
 
 logger = logging.getLogger("neura.rbac")
 
@@ -20,10 +15,8 @@ POLICY_PATH = RBAC_DIR / "policy.csv"
 
 
 @lru_cache
-def get_enforcer():
+def get_enforcer() -> casbin.Enforcer:
     """Create and cache the Casbin enforcer."""
-    if not HAS_CASBIN:
-        raise RuntimeError("casbin is not installed")
     enforcer = casbin.Enforcer(str(MODEL_PATH), str(POLICY_PATH))
     logger.info("rbac_enforcer_initialized", extra={
         "event": "rbac_enforcer_initialized",

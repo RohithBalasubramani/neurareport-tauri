@@ -79,6 +79,7 @@ async def _render_single(page, pdf_path: str, scale: float) -> None:
         landscape=True,
         print_background=True,
         margin={"top": "10mm", "right": "10mm", "bottom": "10mm", "left": "10mm"},
+        prefer_css_page_size=True,
         scale=scale,
     )
 
@@ -102,6 +103,35 @@ def _merge_pdfs(pdf_paths: list[str], output_path: str) -> None:
         merger.close()
 
 
+async def _launch_browser(p):
+    """Launch a Chromium-based browser, preferring system Chrome/Edge.
+
+    Strategy:
+    1. Try system Edge (pre-installed on all Windows 10/11)
+    2. Try system Chrome (commonly installed)
+    3. Fall back to Playwright's own Chromium (downloaded at first launch)
+    """
+    launch_args = [
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--no-sandbox",
+    ]
+
+    # Try system browsers first — no download needed, no AV issues
+    for channel in ("msedge", "chrome"):
+        try:
+            browser = await p.chromium.launch(channel=channel, args=launch_args)
+            print(f"[pdf_worker] Using system browser: {channel}", file=sys.stderr)
+            return browser
+        except Exception:
+            continue
+
+    # Fall back to Playwright's bundled/downloaded Chromium
+    browser = await p.chromium.launch(args=launch_args)
+    print("[pdf_worker] Using Playwright Chromium", file=sys.stderr)
+    return browser
+
+
 async def _convert(html_path: str, pdf_path: str, base_dir: str, pdf_scale: float | None = None) -> None:
     from playwright.async_api import async_playwright
 
@@ -117,15 +147,7 @@ async def _convert(html_path: str, pdf_path: str, base_dir: str, pdf_scale: floa
     needs_chunking = tr_count > _CHUNK_THRESHOLD
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            args=[
-                "--disable-gpu",
-                "--disable-dev-shm-usage",
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-software-rasterizer",
-            ]
-        )
+        browser = await _launch_browser(p)
 
         if not needs_chunking:
             # Standard single-pass rendering
@@ -177,16 +199,6 @@ async def _convert(html_path: str, pdf_path: str, base_dir: str, pdf_scale: floa
                 os.rmdir(tmp_dir)
             except OSError:
                 pass
-
-
-def convert_sync(html_path: str, pdf_path: str, base_dir: str, pdf_scale: float | None = None) -> None:
-    """Sync wrapper for multiprocessing — runs _convert in a fresh event loop."""
-    # Multiprocessing child may inherit closed stdio from Tauri's Stdio::piped(),
-    # or cp1252-encoded streams on Windows that choke on Unicode (e.g. Playwright's
-    # box-drawing error messages).  Always redirect to devnull for safety.
-    sys.stdout = open(os.devnull, "w")
-    sys.stderr = open(os.devnull, "w")
-    asyncio.run(_convert(html_path, pdf_path, base_dir, pdf_scale))
 
 
 def main() -> None:

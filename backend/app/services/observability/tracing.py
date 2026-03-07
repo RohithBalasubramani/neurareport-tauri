@@ -13,18 +13,13 @@ from __future__ import annotations
 
 import logging
 
-try:
-    from opentelemetry import trace
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-    from opentelemetry.instrumentation.logging import LoggingInstrumentor
-    from opentelemetry.sdk.resources import Resource
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    HAS_OTEL = True
-except ImportError:
-    HAS_OTEL = False
-
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.logging import LoggingInstrumentor
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from starlette.types import ASGIApp
 
 logger = logging.getLogger("neura.observability")
@@ -38,9 +33,6 @@ def setup_tracing(
     service_version: str = "dev",
     deployment_environment: str = "production",
 ) -> None:
-    if not HAS_OTEL:
-        logger.warning("opentelemetry not installed, skipping tracing setup")
-        return
     resource = Resource.create(attributes={
         "service.name": service_name,
         "service.version": service_version,

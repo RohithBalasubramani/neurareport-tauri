@@ -177,6 +177,7 @@ class ContractAdapter:
 
         self._pre_aggregate = self._raw.get("pre_aggregate") or {}
         self._group_aggregate = self._raw.get("group_aggregate") or {}
+        self._post_aggregate = self._raw.get("post_aggregate") or {}
         self._reshape_rules = self._raw.get("reshape_rules") or []
         self._row_computed = _ensure_mapping_mixed(self._raw.get("row_computed"))
         self._totals_math = _ensure_mapping_mixed(self._raw.get("totals_math"))
@@ -527,17 +528,17 @@ class ContractAdapter:
         logger.info("pre_aggregate applied: %s → %d rows", strategy, len(df))
         return df
 
-    def _apply_group_aggregate_df(self, df):
+    def _apply_group_aggregate_df(self, df, override_config=None):
         """Aggregate across all batches (e.g. sum) to collapse N batch rows → 1 row.
 
-        Reads ``group_aggregate`` from the contract:
+        Reads ``group_aggregate`` from the contract (or override_config):
           strategy – "sum" (only supported strategy currently)
           columns  – list of columns to aggregate
         Non-aggregated columns keep first row values.
         """
         import pandas as pd
 
-        ga = self._group_aggregate
+        ga = override_config if override_config is not None else self._group_aggregate
         strategy = ga.get("strategy", "")
         agg_columns = ga.get("columns", [])
 
@@ -955,6 +956,10 @@ class ContractAdapter:
                 for out_col in rule.get("output_columns", []):
                     if out_col:
                         melt_alias_set.add(out_col)
+
+        # Apply post_aggregate (runs AFTER reshape, e.g. group melted rows by material)
+        if self._post_aggregate:
+            df = self._apply_group_aggregate_df(df, self._post_aggregate)
 
         # Build result with mapped columns.
         # Add computed columns back to df so subsequent computations can reference them.

@@ -68,17 +68,44 @@ function clearLoadingTimer() {
 
 /**
  * In Tauri desktop mode, the Python backend may take 60-90s on first launch.
- * Poll the health endpoint until it responds before rendering the app.
+ * Uses Tauri IPC to check backend health (bypasses browser CORS/CSP).
+ * Falls back to HTTP fetch for non-Tauri or if IPC is unavailable.
  */
 async function waitForBackend(baseUrl, maxWaitMs = 120000) {
   const start = Date.now()
   const interval = 1000
+
+  // Prefer Tauri IPC health check — no CORS, no CSP, no mixed-content issues
+  let invoke = null
+  if (isTauri()) {
+    try {
+      const core = await import('@tauri-apps/api/core')
+      invoke = core.invoke
+    } catch (_) {
+      console.warn('[tauri] IPC unavailable, falling back to HTTP health check')
+    }
+  }
+
   while (Date.now() - start < maxWaitMs) {
     try {
-      const resp = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(2000) })
-      if (resp.ok) return
-    } catch (_) {
-      // Backend not ready yet
+      if (invoke) {
+        // IPC: Rust does a TCP connect check — no browser restrictions
+        const healthy = await invoke('check_backend_health')
+        if (healthy) {
+          // Backend port is open — verify HTTP is actually serving
+          try {
+            const resp = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(3000) })
+            if (resp.ok) return
+          } catch (_) {
+            // HTTP not ready yet but TCP is open — keep trying
+          }
+        }
+      } else {
+        const resp = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(2000) })
+        if (resp.ok) return
+      }
+    } catch (e) {
+      console.debug('[health] waiting...', e?.message || '')
     }
     await new Promise((r) => setTimeout(r, interval))
   }
@@ -91,6 +118,7 @@ async function bootstrap() {
 
   if (isTauri()) {
     showLoading()
+    console.log('[tauri] Waiting for backend at:', getApiBase())
     await waitForBackend(getApiBase())
     clearLoadingTimer()
   }

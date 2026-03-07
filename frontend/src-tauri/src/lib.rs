@@ -50,6 +50,17 @@ fn get_startup_error(state: tauri::State<'_, Mutex<BackendState>>) -> Option<Str
     state.lock().unwrap().error.clone()
 }
 
+/// Check if the backend is reachable via TCP.  Called from the frontend
+/// health-check loop so the request never touches browser CORS / CSP.
+#[tauri::command]
+async fn check_backend_health(state: tauri::State<'_, Mutex<BackendState>>) -> Result<bool, String> {
+    let port = state.lock().map_err(|e| e.to_string())?.port;
+    match tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port)).await {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
 /// Find the backend executable inside the bundled resources folder.
 ///
 /// The `tauri.conf.json` resources config `"neurareport-backend": "./"` copies
@@ -148,6 +159,7 @@ pub fn run() {
                     .env("PYTHONUNBUFFERED", "1")
                     // Desktop app is always a local/trusted environment
                     .env("NEURA_DEBUG", "true")
+                    .env("NEURA_ALLOWED_HOSTS_ALL", "true")
                     .env("NEURA_JWT_SECRET", "neurareport-desktop-local")
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped());
@@ -248,7 +260,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_backend_port,
             get_backend_url,
-            get_startup_error
+            get_startup_error,
+            check_backend_health
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

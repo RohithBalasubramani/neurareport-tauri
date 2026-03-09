@@ -7,7 +7,7 @@ import os
 import re
 import subprocess
 import sys as _sys
-from backend.app.repositories.dataframes import DuckDBDataFrameQuery, SQLiteDataFrameLoader, sqlite_shim as sqlite3
+from backend.app.repositories.dataframes import SQLiteDataFrameLoader
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -115,7 +115,6 @@ def _html_to_pdf_subprocess(
 
 from .contract_adapter import ContractAdapter, format_decimal_str
 from .date_utils import get_col_type, mk_between_pred_for_date
-from .discovery import discover_batches_and_counts
 from .common_helpers import (
     _format_for_token,
     _has_time_component,
@@ -209,7 +208,6 @@ def fill_and_print(
     END_DATE: str,
     batch_ids: list[str] | None = None,
     KEY_VALUES: dict | None = None,
-    GENERATOR_BUNDLE: dict | None = None,
     __force_single: bool = False,
     BRAND_KIT_ID: str | None = None,
 ):
@@ -936,7 +934,6 @@ def fill_and_print(
                     END_DATE=END_DATE,
                     batch_ids=None,
                     KEY_VALUES=selection or None,
-                    GENERATOR_BUNDLE=GENERATOR_BUNDLE,
                     __force_single=True,
                 )
                 html_sections.append(Path(result["html_path"]).read_text(encoding="utf-8", errors="ignore"))
@@ -1076,82 +1073,6 @@ def fill_and_print(
                 return dt_obj.strftime("%Y-%m-%d %H:%M:%S")
             return dt_obj.strftime("%Y-%m-%d")
         return "" if raw_value is None else str(raw_value).strip()
-
-    def _run_generator_entrypoints(
-        entrypoints: dict,
-        sql_params: dict[str, object],
-        df_loader: SQLiteDataFrameLoader,
-    ) -> dict[str, list[dict[str, object]]]:
-        if not entrypoints:
-            return {}
-        alias_fix_patterns = [
-            re.compile(r"\brows\.", re.IGNORECASE),
-            re.compile(r"\brows_agg\.", re.IGNORECASE),
-        ]
-
-        def _wrap_date_param(sql_text: str, param: str) -> str:
-            pattern = re.compile(rf":{param}\b")
-
-            def _replace(match: re.Match[str]) -> str:
-                start = match.start()
-                prefix = sql_text[:start].rstrip()
-                prefix_lower = prefix.lower()
-                if prefix_lower.endswith("date(") or prefix_lower.endswith("datetime("):
-                    return match.group(0)
-                return f"DATE({match.group(0)})"
-
-            return pattern.sub(_replace, sql_text)
-
-        def _prepare_sql(sql_text: str) -> str:
-            updated = re.sub(r"PARAM:([A-Za-z0-9_]+)", r":\1", sql_text)
-            if "DATE(" not in updated.upper():
-                return updated
-            for param in ("from_date", "to_date"):
-                updated = _wrap_date_param(updated, param)
-            return updated
-
-        def _attempt_sql_fix(sql_text: str, exc: Exception | None) -> str | None:
-            if exc is None:
-                return None
-            message = str(exc).lower()
-            if "no such column" not in message:
-                return None
-            fixed_sql = sql_text
-            for pattern in alias_fix_patterns:
-                fixed_sql = pattern.sub("", fixed_sql)
-            return fixed_sql if fixed_sql != sql_text else None
-
-        frames = df_loader.frames()
-        query_engine = DuckDBDataFrameQuery(frames)
-        try:
-            results: dict[str, list[dict[str, object]]] = {}
-            for name in ("header", "rows", "totals"):
-                sql = entrypoints.get(name)
-                if not sql:
-                    results[name] = []
-                    continue
-                current_sql = _prepare_sql(sql)
-                last_error: Exception | None = None
-                for attempt in range(2):
-                    try:
-                        df_rows = query_engine.execute(current_sql, sql_params)
-                    except sqlite3.OperationalError as exc:
-                        last_error = exc
-                        fixed_sql = _attempt_sql_fix(current_sql, exc)
-                        if fixed_sql is not None and fixed_sql != current_sql:
-                            current_sql = fixed_sql
-                            continue
-                        raise
-                    else:
-                        last_error = None
-                        results[name] = df_rows.to_dict("records")
-                        break
-                else:
-                    assert last_error is not None
-                    raise last_error
-            return results
-        finally:
-            query_engine.close()
 
     start_dt = _parse_date_like(START_DATE)
     end_dt = _parse_date_like(END_DATE)
@@ -1468,96 +1389,25 @@ def fill_and_print(
         if sv_key not in sql_params:
             sql_params[sv_key] = sv_val
 
-    if "recipe_code" in sql_params:
-        _log_debug(
-            "[multi-debug] generator param binding",
-            "force_single" if __force_single else "fanout_root",
-            "key_values=",
-            key_values_map,
-            "recipe_code=",
-            sql_params.get("recipe_code"),
-        )
+    # --- DataFrame pipeline (sole data path) ---
+    from .dataframe_pipeline import DataFramePipeline
 
-    if GENERATOR_BUNDLE is None:
-        generator_dir = TEMPLATE_PATH.parent / "generator"
-        meta_path = generator_dir / "generator_assets.json"
-        if meta_path.exists():
-            try:
-                meta_payload = json.loads(meta_path.read_text(encoding="utf-8"))
-            except Exception:
-                meta_payload = None
-            else:
-                bundle: dict[str, object] = {"meta": meta_payload}
-                output_schemas_path = generator_dir / "output_schemas.json"
-                if output_schemas_path.exists():
-                    try:
-                        bundle["output_schemas"] = json.loads(output_schemas_path.read_text(encoding="utf-8"))
-                    except Exception:
-                        pass
-                GENERATOR_BUNDLE = bundle
+    df_value_filters: dict[str, list] = {}
+    if key_values_map:
+        for name, values in key_values_map.items():
+            df_value_filters[name] = values
 
-    generator_results: dict[str, list[dict[str, object]]] | None = None
+    pipeline = DataFramePipeline(
+        contract_adapter=contract_adapter,
+        loader=dataframe_loader,
+        params=sql_params,
+        start_date=sql_params.get("start_date") or sql_params.get("from_date"),
+        end_date=sql_params.get("end_date") or sql_params.get("to_date"),
+        value_filters=df_value_filters,
+    )
+    generator_results = pipeline.execute()
 
-    # --- DataFrame pipeline ---
-    if not multi_key_selected or _has_group_aggregate:
-        try:
-            from .dataframe_pipeline import DataFramePipeline
-
-            df_value_filters: dict[str, list] = {}
-            if key_values_map:
-                for name, values in key_values_map.items():
-                    df_value_filters[name] = values
-
-            pipeline = DataFramePipeline(
-                contract_adapter=contract_adapter,
-                loader=dataframe_loader,
-                params=sql_params,
-                start_date=sql_params.get("start_date") or sql_params.get("from_date"),
-                end_date=sql_params.get("end_date") or sql_params.get("to_date"),
-                value_filters=df_value_filters,
-            )
-            generator_results = pipeline.execute()
-            if not any(generator_results.get(s) for s in ("header", "rows", "totals")):
-                logger.warning("DataFrame pipeline returned empty results; falling back to SQL path")
-                generator_results = None
-        except Exception as exc:
-            logger.warning("DataFrame pipeline failed; falling back to SQL path: %s", exc)
-            generator_results = None
-
-    # ---- Normalize / auto-discover BATCH_IDS ----
-    if generator_results is None:
-        need_discover = False
-        existing = batch_ids
-
-        if isinstance(existing, str):
-            existing = [existing]
-
-        if not existing:
-            need_discover = True
-        else:
-            if not isinstance(existing, (list, tuple)):
-                need_discover = True
-            else:
-                existing = list(existing)
-                if len(pcols) > 1:
-                    if any(not _looks_like_composite_id(i, len(pcols)) for i in existing):
-                        logger.debug("Provided BATCH_IDS do not match composite key format; falling back to auto-discovery.")
-                        need_discover = True
-
-        if need_discover:
-            _fp_progress("discover_batches START")
-            discovery_summary = discover_batches_and_counts(
-                db_path=DB_PATH,
-                contract=OBJ,
-                start_date=START_DATE,
-                end_date=END_DATE,
-                key_values=key_values_map,
-            )
-            BATCH_IDS = [str(batch["id"]) for batch in discovery_summary.get("batches", [])]
-        else:
-            BATCH_IDS = existing
-    else:
-        BATCH_IDS = ["__GENERATOR_SINGLE__"]
+    BATCH_IDS = ["__DF_PIPELINE__"]
 
     _fp_progress(f"BATCH_IDS resolved: {len(BATCH_IDS or [])} batches")
     _log_debug("BATCH_IDS:", len(BATCH_IDS or []), (BATCH_IDS or [])[:20] if BATCH_IDS else [])
@@ -2008,114 +1858,7 @@ def fill_and_print(
     totals_accum = defaultdict(float)
     last_totals_per_token = {token: "0" for token in TOTALS}
 
-    child_totals_cols = {col: list(tokens) for col, tokens in totals_by_table.get(child_table, {}).items()}
-
-    allowed_row_tokens = {t for t in PLACEHOLDER_TO_COL.keys() if t not in TOTALS} - set(HEADER_TOKENS)
-    row_template = None
-    row_span = None
-    row_tokens_in_template: list[str] = []
-    row_columns_template: list[str] = []
-    row_cols_needed: list[str] = []
-    row_render_mode = "none"
-
-    prefetched_headers: dict[str, dict[str, Any]] = {}
-    prefetched_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    prefetched_totals: dict[str, dict[str, Any]] = {}
-
-    if generator_results is None:
-        tbody_m, tbody_inner = best_rows_tbody(prototype_block, allowed_row_tokens)
-        if tbody_m and tbody_inner:
-            row_template, row_span, row_tokens_in_template = find_row_template(tbody_inner, allowed_row_tokens)
-        if row_tokens_in_template:
-            row_render_mode = "tbody"
-        else:
-            tr_tokens = [
-                m.group(1) or m.group(2)
-                for m in re.finditer(r"\{\{\s*([^}\n]+?)\s*\}\}|\{\s*([^}\n]+?)\s*\}", prototype_block)
-            ]
-            row_tokens_in_template = [t.strip() for t in tr_tokens if t and t.strip() in allowed_row_tokens]
-            if row_tokens_in_template:
-                row_render_mode = "tr"
-
-        if row_tokens_in_template:
-            row_columns_template = [
-                _extract_col_name(PLACEHOLDER_TO_COL.get(tok)) or "" for tok in row_tokens_in_template
-            ]
-            row_cols_needed = sorted(
-                {
-                    col
-                    for t in row_tokens_in_template
-                    for col in [_extract_col_name(PLACEHOLDER_TO_COL.get(t))]
-                    if col
-                }
-            )
-            if order_col.upper() != "ROWID" and order_col not in row_cols_needed:
-                row_cols_needed.append(order_col)
-
-        def _compose_key(row: Mapping[str, Any], cols: list[str]) -> str:
-            if not cols:
-                return ""
-            if len(cols) == 1:
-                return str(row.get(cols[0], ""))
-            parts: list[str] = []
-            for col in cols:
-                val = row.get(col)
-                parts.append("" if val is None else str(val))
-            return "|".join(parts)
-
-        def _batch_predicate(cols: list[str], batch_ids_chunk: list[str]) -> tuple[str, list[Any]]:
-            if not cols or not batch_ids_chunk:
-                return "1=0", []
-            if len(cols) == 1:
-                placeholders = ", ".join("?" for _ in batch_ids_chunk)
-                return f"{qident(cols[0])} IN ({placeholders})", list(batch_ids_chunk)
-            tuple_placeholder = "(" + ", ".join("?" for _ in cols) + ")"
-            placeholders = ", ".join(tuple_placeholder for _ in batch_ids_chunk)
-            params: list[Any] = []
-            for bid in batch_ids_chunk:
-                params.extend(_split_bid(bid, len(cols)))
-            cols_expr = ", ".join(qident(c) for c in cols)
-            return f"({cols_expr}) IN ({placeholders})", params
-
-        def _iter_batch_chunks(batch_ids_chunk: list[str], cols: list[str], extra_params: int) -> Iterable[list[str]]:
-            max_params = 900
-            per_id = max(1, len(cols))
-            allowed = max(1, max_params - extra_params)
-            chunk_size = max(1, allowed // per_id)
-            for idx in range(0, len(batch_ids_chunk), chunk_size):
-                yield batch_ids_chunk[idx : idx + chunk_size]
-
-        if BATCH_IDS:
-            # --- DataFrame prefetch (no SQL) ---
-            try:
-                if header_cols and parent_table:
-                    df_parent = dataframe_loader.frame(parent_table)
-                    select_cols = list(dict.fromkeys((pcols or []) + header_cols))
-                    existing_cols = [c for c in select_cols if c in df_parent.columns]
-                    if existing_cols:
-                        df_filtered = contract_adapter._apply_date_filter_df(
-                            df_parent, parent_table,
-                            sql_params.get("start_date") or sql_params.get("from_date"),
-                            sql_params.get("end_date") or sql_params.get("to_date"),
-                        )
-                        records = df_filtered[existing_cols].to_dict("records")
-                        for row_dict in records:
-                            key = _compose_key(row_dict, pcols) if pcols else "default"
-                            if key and key not in prefetched_headers:
-                                prefetched_headers[key] = row_dict
-            except Exception as exc:
-                logger.warning("DataFrame prefetch failed, falling back to SQL: %s", exc)
-
     # ---- Render all batches ----
-    fallback_con: sqlite3.Connection | None = None
-
-    def _get_fallback_cursor() -> sqlite3.Cursor:
-        nonlocal fallback_con
-        if fallback_con is None:
-            fallback_con = sqlite3.connect(str(DB_PATH))
-            fallback_con.row_factory = sqlite3.Row
-        return fallback_con.cursor()
-
     rendered_blocks = []
     if generator_results is not None:
         # ── Detect batch-level tokens (present in block but unknown to contract) ──
@@ -2280,147 +2023,6 @@ def fill_and_print(
                 rendered_blocks.append(blk_html)
             else:
                 logger.debug("Generator produced no usable row data after filtering; skipping block.")
-
-    else:
-        for batch_id in BATCH_IDS or []:
-            block_html = prototype_block
-
-            # (a) Header fill (parent row)
-            if header_cols:
-                r = prefetched_headers.get(batch_id)
-                if r:
-                    for t in HEADER_TOKENS:
-                        if t in PLACEHOLDER_TO_COL:
-                            col = _extract_col_name(PLACEHOLDER_TO_COL.get(t))
-                            if not col:
-                                continue
-                            val = r.get(col, "")
-                            block_html = sub_token(block_html, t, format_token_value(t, val))
-
-            # (b) Row repeater (child rows)
-            if not row_tokens_in_template:
-                # --- Additive: header-only block support (receipts, summaries) ---
-                if header_cols and HEADER_TOKENS:
-                    logger.debug("Header-only block for batch %s; appending without row expansion.", batch_id)
-                    rendered_blocks.append(block_html)
-                else:
-                    logger.debug("No row tokens and no header tokens for batch %s; skipping.", batch_id)
-                continue
-
-            rows = [dict(r) for r in prefetched_rows.get(batch_id, [])]
-            if not rows:
-                maj_table = majority_table_for_tokens(row_tokens_in_template, PLACEHOLDER_TO_COL)
-                if maj_table:
-                    date_col = DATE_COLUMNS.get(maj_table, "")
-                    if date_col:
-                        cols_needed = sorted(
-                            {
-                                col
-                                for t in row_tokens_in_template
-                                for col in [_extract_col_name(PLACEHOLDER_TO_COL.get(t))]
-                                if col
-                            }
-                        )
-                        if date_col not in cols_needed:
-                            cols_needed.append(date_col)
-                        try:
-                            df = dataframe_loader.frame(maj_table)
-                            df_filtered = contract_adapter._apply_date_filter_df(
-                                df, maj_table, START_DATE, END_DATE,
-                            )
-                            available = [c for c in cols_needed if c in df_filtered.columns]
-                            if available:
-                                df_selected = df_filtered[available].copy()
-                                if date_col in df_selected.columns:
-                                    df_selected = df_selected.sort_values(date_col, na_position="last")
-                                rows = df_selected.to_dict("records")
-                        except Exception as exc:
-                            logger.warning("DF row fallback failed: %s", exc)
-                        logger.debug("Row fallback used: table=%s, rows=%d", maj_table, len(rows))
-
-            if not rows:
-                logger.debug("No child rows found for batch %s; injecting empty-state.", batch_id)
-                _no_data_msg = (
-                    '<tr><td colspan="100" style="text-align:center;padding:20px;'
-                    'color:#666;font-style:italic;">No data available for the '
-                    'selected date range</td></tr>'
-                )
-                _tbody_re_b = re.compile(r'(<tbody[^>]*>)(.*?)(</tbody>)', re.DOTALL)
-                _tbody_match_b = _tbody_re_b.search(block_html)
-                if _tbody_match_b:
-                    block_html = (
-                        block_html[:_tbody_match_b.start(2)]
-                        + _no_data_msg
-                        + block_html[_tbody_match_b.end(2):]
-                    )
-                else:
-                    # No <tbody> — replace entire block content with no-data row
-                    block_html = _no_data_msg
-                rendered_blocks.append(block_html)
-                continue
-
-            significant_cols = [
-                col
-                for col in row_cols_needed
-                if col and not any(keyword in col.lower() for keyword in ("row", "serial", "sl"))
-            ]
-            filtered_rows = []
-            for r in rows:
-                if significant_cols and not _row_has_significant_data(r, significant_cols):
-                    continue
-                filtered_rows.append(dict(r))
-
-            if not filtered_rows and rows:
-                filtered_rows = [dict(r) for r in rows]
-            filtered_rows = _prune_placeholder_rows(filtered_rows, row_tokens_in_template)
-            if __force_single:
-                _log_debug(
-                    f"[multi-debug] sql rows: total={len(rows)}, filtered={len(filtered_rows)}, key_values={KEY_VALUES}"
-                )
-            if not filtered_rows:
-                logger.debug("No significant child rows for batch %s; skipping block.", batch_id)
-                continue
-
-            _reindex_serial_fields(filtered_rows, row_tokens_in_template, row_cols_needed)
-
-            # Pre-build column lookup once per batch (avoids repeated _extract_col_name)
-            _row_col_lookup = {}
-            for t in row_tokens_in_template:
-                col = _extract_col_name(PLACEHOLDER_TO_COL.get(t))
-                if col:
-                    _row_col_lookup[t] = col
-
-            if row_render_mode == "tbody" and row_template and row_span and tbody_m and tbody_inner:
-                parts = _fast_row_sub(row_template, row_tokens_in_template, _row_col_lookup, filtered_rows)
-
-                new_tbody_inner = tbody_inner[: row_span[0]] + "\n".join(parts) + tbody_inner[row_span[1] :]
-                block_html = block_html[: tbody_m.start(1)] + new_tbody_inner + block_html[tbody_m.end(1) :]
-            else:
-                parts = _fast_row_sub(prototype_block, row_tokens_in_template, _row_col_lookup, filtered_rows)
-
-                block_html = "\n".join(parts)
-
-            # (c) Per-batch totals
-            batch_total_values = {token: "0" for token in TOTALS}
-
-            if child_totals_cols:
-                child_cols = sorted(child_totals_cols.keys())
-                if child_cols:
-                    sums = prefetched_totals.get(batch_id, {})
-                    for col in child_cols:
-                        raw_val = sums.get(col, 0)
-                        fv, formatted = _coerce_total_value(raw_val)
-                        if fv is not None:
-                            key = (child_table, col)
-                            totals_accum[key] = totals_accum.get(key, 0.0) + fv
-                        for token in child_totals_cols[col]:
-                            batch_total_values[token] = formatted
-
-            for token, value in batch_total_values.items():
-                block_html = sub_token(block_html, token, value)
-                last_totals_per_token[token] = value
-
-            rendered_blocks.append(block_html)
     # ---- Assemble full document ----
     rows_rendered = bool(rendered_blocks)
     if not rows_rendered:
@@ -2455,24 +2057,12 @@ def fill_and_print(
                     html_multi = sub_token(html_multi, token, format_token_value(token, value))
 
     # --- Fill remaining header tokens in the shell (outside batch blocks). ---
-    # In DataFrame mode, generator_results["header"] already has token→value;
-    # in SQL mode, use prefetched_headers with column extraction.
     if HEADER_TOKENS and generator_results:
         gen_header = (generator_results.get("header") or [{}])[0] if generator_results.get("header") else {}
         for t in HEADER_TOKENS:
             val = gen_header.get(t)
             if val is not None and str(val).strip():
                 html_multi = sub_token(html_multi, t, format_token_value(t, val))
-
-    if HEADER_TOKENS and prefetched_headers:
-        first_header = next(iter(prefetched_headers.values()), {})
-        if first_header:
-            for t in HEADER_TOKENS:
-                if t in PLACEHOLDER_TO_COL:
-                    col = _extract_col_name(PLACEHOLDER_TO_COL.get(t))
-                    if col and col in first_header:
-                        val = first_header[col]
-                        html_multi = sub_token(html_multi, t, format_token_value(t, val))
 
     # Apply literals globally
     for t, s in LITERALS.items():
@@ -2494,10 +2084,6 @@ def fill_and_print(
     _html_to_pdf_subprocess(OUT_HTML, OUT_PDF, TEMPLATE_PATH.parent)
     _fp_progress("PDF generation complete")
     _log_debug("Wrote PDF via Playwright:", OUT_PDF)
-
-    if fallback_con is not None:
-        with contextlib.suppress(Exception):
-            fallback_con.close()
 
     return {"html_path": str(OUT_HTML), "pdf_path": str(OUT_PDF), "rows_rendered": rows_rendered}
 

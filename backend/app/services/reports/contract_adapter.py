@@ -721,6 +721,16 @@ class ContractAdapter:
             if resolved:
                 return df[resolved].mean()
             return 0
+        elif op == "add_many":
+            # Sum multiple columns row-wise: columns: ["col1", "col2", ...]
+            cols = op_spec.get("columns", [])
+            total = None
+            for c in cols:
+                rc = self._resolve_df_col(df, c)
+                if rc:
+                    series = pd.to_numeric(df[rc], errors="coerce").fillna(0)
+                    total = series if total is None else total + series
+            return total if total is not None else 0
         elif op == "count":
             col = op_spec.get("column", "")
             resolved = self._resolve_df_col(df, col)
@@ -1203,6 +1213,56 @@ class ContractAdapter:
                         str_vals = df[primary_alias].astype(str).str.strip()
                         mask = mask & (str_vals != "") & (str_vals.str.lower() != "nan") & (str_vals.str.lower() != "none")
                         df = df.loc[mask].reset_index(drop=True)
+
+            elif strategy == "SELECT" and columns:
+                # SELECT: derive/rename columns, optionally group by + aggregate.
+                # Each column spec: {"as": "alias", "from": ["table.col"]}
+                # If from[0] is "date(table.col)" → extract date part.
+                # If the rule has "group_by": true, group by derived columns
+                # and SUM all numeric columns.
+                from .discovery_excel import _coerce_datetime_series
+
+                for col_spec in columns:
+                    alias = col_spec.get("as", "")
+                    sources = col_spec.get("from", [])
+                    if not alias or not sources:
+                        continue
+                    src = sources[0]
+                    # Handle date() wrapper
+                    date_match = re.match(r"date\((.+)\)", src, re.IGNORECASE)
+                    if date_match:
+                        inner = date_match.group(1)
+                        src_col = inner.split(".", 1)[1] if "." in inner else inner
+                        if src_col in df.columns:
+                            dt_s = _coerce_datetime_series(df[src_col])
+                            df[alias] = dt_s.dt.strftime("%Y-%m-%d").fillna("")
+                    else:
+                        src_col = src.split(".", 1)[1] if "." in src else src
+                        if src_col in df.columns:
+                            df[alias] = df[src_col].values
+
+                # If group_by hint is present, group by derived alias columns
+                group_by_aliases = rule.get("group_by")
+                if group_by_aliases:
+                    if isinstance(group_by_aliases, bool):
+                        # Auto-detect: group by all non-numeric derived columns
+                        group_by_aliases = [
+                            cs.get("as", "") for cs in columns
+                            if cs.get("as", "") in df.columns
+                            and not pd.api.types.is_numeric_dtype(df[cs["as"]])
+                        ]
+                    existing_groups = [g for g in group_by_aliases if g in df.columns]
+                    if existing_groups:
+                        agg_map = {}
+                        for col in df.columns:
+                            if col in existing_groups:
+                                continue
+                            if pd.api.types.is_numeric_dtype(df[col]):
+                                agg_map[col] = "sum"
+                            else:
+                                agg_map[col] = "first"
+                        df = df.groupby(existing_groups, sort=True).agg(agg_map).reset_index()
+                        logger.info("select_group_by applied → %d rows", len(df))
 
             elif strategy == "WINDOW_DIFF":
                 # Detect run intervals from cumulative counter changes.

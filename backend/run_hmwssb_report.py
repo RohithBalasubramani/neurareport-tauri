@@ -82,7 +82,6 @@ def main():
         END_DATE="2030-12-31",
         batch_ids=None,
         KEY_VALUES=None,
-        GENERATOR_BUNDLE=None,
     )
 
     print()

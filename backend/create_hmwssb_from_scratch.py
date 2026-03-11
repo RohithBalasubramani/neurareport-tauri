@@ -431,7 +431,6 @@ def step5_generate_report(contract: dict, html: str, literals: dict):
         END_DATE="2030-12-31",
         batch_ids=None,
         KEY_VALUES=None,
-        GENERATOR_BUNDLE=None,
     )
     elapsed = time.time() - t0
 

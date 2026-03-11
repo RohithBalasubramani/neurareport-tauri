@@ -37,7 +37,7 @@ class SQLiteDataFrameLoader:
             if self._table_names is not None:
                 return list(self._table_names)
 
-            with sqlite3.connect(str(self.db_path)) as con:
+            with sqlite3.connect(str(self.db_path), timeout=30) as con:
                 cur = con.execute(
                     "SELECT name FROM sqlite_master "
                     "WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;"
@@ -81,7 +81,7 @@ class SQLiteDataFrameLoader:
         quoted = table_name.replace('"', '""')
         limit_clause = f" LIMIT {int(self.row_limit)}" if self.row_limit else ""
         try:
-            with sqlite3.connect(str(self.db_path)) as con:
+            with sqlite3.connect(str(self.db_path), timeout=30) as con:
                 df = pd.read_sql_query(
                     f'SELECT rowid AS "__rowid__", * FROM "{quoted}"{limit_clause}', con
                 )
@@ -136,7 +136,7 @@ class SQLiteDataFrameLoader:
         info_rows: list[dict[str, Any]] = []
         fk_rows: list[dict[str, Any]] = []
         try:
-            with sqlite3.connect(str(self.db_path)) as con:
+            with sqlite3.connect(str(self.db_path), timeout=30) as con:
                 cur = con.execute(f"PRAGMA table_info('{quoted}')")
                 info_rows = [
                     {

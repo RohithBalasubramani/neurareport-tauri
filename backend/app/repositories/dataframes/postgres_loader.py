@@ -8,6 +8,7 @@ Uses SQLAlchemy + psycopg2 for synchronous access (required by pandas.read_sql_q
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from typing import Any
 
@@ -16,8 +17,8 @@ from sqlalchemy import create_engine, text, inspect
 
 logger = logging.getLogger("neura.dataframes.postgres")
 
-# Maximum rows to load per table to avoid OOM on large industrial datasets
-DEFAULT_ROW_LIMIT = 500_000
+# Row limit per table.  0 = unlimited (default).
+DEFAULT_ROW_LIMIT = int(os.getenv("NEURA_DF_ROW_LIMIT", "0"))
 
 
 class PostgresDataFrameLoader:

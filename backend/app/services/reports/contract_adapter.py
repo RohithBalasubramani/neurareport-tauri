@@ -111,7 +111,7 @@ def format_fixed_decimals(value: Any, decimals: int, max_decimals: int = 3) -> s
     except (InvalidOperation, ValueError, TypeError):
         return str(value)
     if not number.is_finite():
-        logger.warning(
+        logger.debug(
             "format_fixed_decimals_non_finite value=%s coerced_to=0",
             value,
             extra={"event": "format_fixed_decimals_non_finite", "original": str(value)},
@@ -932,13 +932,31 @@ class ContractAdapter:
         if not source_table:
             return pd.DataFrame()
 
+        # When dates are available AND the table has a known date column,
+        # load directly from SQLite with a WHERE clause to avoid the row_limit
+        # truncation that can silently discard data beyond the first N rows.
+        date_col = self._date_columns.get(source_table.lower()) or self._date_columns.get(source_table)
+        use_filtered_load = (
+            date_col
+            and (start_date or end_date)
+            and hasattr(loader, "frame_date_filtered")
+        )
+
         try:
-            df = loader.frame(source_table).copy()
+            if use_filtered_load:
+                df = loader.frame_date_filtered(source_table, date_col, start_date, end_date)
+                logger.info("resolve_row_data: loaded %d rows from %s (date-filtered at SQL level)", len(df), source_table)
+            else:
+                df = loader.frame(source_table).copy()
+                logger.info("resolve_row_data: loaded %d rows from %s", len(df), source_table)
         except Exception:
+            logger.exception("resolve_row_data: failed to load table %r", source_table)
             return pd.DataFrame()
 
-        # Apply date filter
-        df = self._apply_date_filter_df(df, source_table, start_date, end_date)
+        # Apply date filter (still needed for non-filtered loads or to refine tz-aware comparisons)
+        if not use_filtered_load:
+            df = self._apply_date_filter_df(df, source_table, start_date, end_date)
+            logger.info("resolve_row_data: %d rows after date filter (start=%s end=%s)", len(df), start_date, end_date)
 
         # Apply value filters
         if value_filters:
@@ -956,6 +974,7 @@ class ContractAdapter:
         melt_alias_set: set[str] = set()
         if self._reshape_rules:
             df = self._apply_reshape_df(df, loader, source_table)
+            logger.info("resolve_row_data: %d rows after reshape", len(df))
             # Build set of reshape alias column names for fallback resolution
             for rule in self._reshape_rules:
                 for col_spec in rule.get("columns", []):

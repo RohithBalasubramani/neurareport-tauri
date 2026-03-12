@@ -810,23 +810,34 @@ def fill_and_print(
                 row[col] = idx
 
     def _value_for_token(row: Mapping[str, Any], token: str) -> Any:
+        def _sanitize(v: Any) -> Any:
+            if v is None:
+                return None
+            try:
+                import math
+                if isinstance(v, float) and math.isnan(v):
+                    return None
+            except (TypeError, ValueError):
+                pass
+            return v
+
         if not token:
             return None
         if token in row:
-            return row[token]
+            return _sanitize(row[token])
         normalized = str(token).lower()
         for key in row.keys():
             if isinstance(key, str) and key.lower() == normalized:
-                return row[key]
+                return _sanitize(row[key])
         mapped = PLACEHOLDER_TO_COL.get(token)
         if mapped:
             col = _extract_col_name(mapped)
             if col:
                 if col in row:
-                    return row[col]
+                    return _sanitize(row[col])
                 for key in row.keys():
                     if isinstance(key, str) and key.lower() == col.lower():
-                        return row[key]
+                        return _sanitize(row[key])
         return None
 
     def _prune_placeholder_rows(rows: Sequence[Mapping[str, Any]], tokens: Sequence[str]) -> list[dict[str, Any]]:
@@ -1305,10 +1316,12 @@ def fill_and_print(
     sql_params: dict[str, object] = {
         "from_date": db_start,
         "to_date": db_end,
+        "start_date": db_start,
+        "end_date": db_end,
     }
 
     for token in contract_adapter.param_tokens:
-        if token in ("from_date", "to_date"):
+        if token in ("from_date", "to_date", "start_date", "end_date"):
             continue
         if token in key_values_map:
             first_value = _first_key_value(key_values_map[token])

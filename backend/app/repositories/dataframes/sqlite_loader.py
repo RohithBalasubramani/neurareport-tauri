@@ -13,9 +13,10 @@ import pandas as pd
 
 logger = logging.getLogger("neura.dataframes.sqlite")
 
-# Maximum rows to load per table to avoid OOM on large datasets.
-# Matches the PostgresDataFrameLoader guard (postgres_loader.py).
-DEFAULT_ROW_LIMIT = 500_000
+# Row limit per table.  0 = unlimited (default).
+# The date-filtered path (frame_date_filtered) already limits data to the
+# requested range, so a global cap is no longer needed.
+DEFAULT_ROW_LIMIT = int(os.getenv("NEURA_DF_ROW_LIMIT", "0"))
 
 
 class SQLiteDataFrameLoader:
@@ -94,6 +95,61 @@ class SQLiteDataFrameLoader:
                 table_name, len(df), self.row_limit,
             )
         # DuckDB fails to register DataFrames with string dtypes; coerce to object.
+        for col in df.columns:
+            if pd.api.types.is_string_dtype(df[col].dtype):
+                df[col] = df[col].astype("object")
+        if "__rowid__" in df.columns:
+            rowid_series = df["__rowid__"].copy()
+            if "rowid" not in df.columns:
+                df.insert(0, "rowid", rowid_series)
+        return df
+
+    def frame_date_filtered(
+        self,
+        table_name: str,
+        date_column: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
+        """Load a table with a date range WHERE clause applied at the SQLite level.
+
+        This bypasses the row_limit truncation by filtering in SQL before loading.
+        Returns a fresh (uncached) DataFrame.
+        """
+        clean = self._assert_table(table_name)
+        quoted_table = clean.replace('"', '""')
+        quoted_col = date_column.replace('"', '""')
+
+        conditions = []
+        params: list[str] = []
+        if start_date:
+            conditions.append(f'"{quoted_col}" >= ?')
+            params.append(str(start_date))
+        if end_date:
+            conditions.append(f'"{quoted_col}" <= ?')
+            # Snap to end of day for the end_date
+            ed = str(end_date).strip()
+            if len(ed) == 10:  # date only, no time part
+                ed = ed + "T23:59:59"
+            params.append(ed)
+
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f'SELECT rowid AS "__rowid__", * FROM "{quoted_table}"{where}'
+
+        try:
+            with sqlite3.connect(str(self.db_path), timeout=30) as con:
+                df = pd.read_sql_query(sql, con, params=params)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed loading table {table_name!r} with date filter: {exc}"
+            ) from exc
+
+        logger.info(
+            "frame_date_filtered table=%s col=%s start=%s end=%s rows=%d",
+            table_name, date_column, start_date, end_date, len(df),
+        )
+
+        # Same post-processing as _read_table
         for col in df.columns:
             if pd.api.types.is_string_dtype(df[col].dtype):
                 df[col] = df[col].astype("object")

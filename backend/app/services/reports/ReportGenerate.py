@@ -64,6 +64,21 @@ def _run_async(coro):
 _PDF_WORKER_SCRIPT = str(Path(__file__).with_name("_pdf_worker.py"))
 
 
+def _pdf_worker_mp_target(html_path: str, pdf_path: str, base_dir: str, pdf_scale: float | None) -> None:
+    """Target function for multiprocessing.Process — runs _convert in a fresh process."""
+    from backend.app.services.reports._pdf_worker import _convert
+    asyncio.run(_convert(
+        html_path=html_path,
+        pdf_path=pdf_path,
+        base_dir=base_dir,
+        pdf_scale=pdf_scale,
+    ))
+
+
+# Timeout for the PDF worker process (10 minutes — large chunked docs can take a while).
+_PDF_PROCESS_TIMEOUT = int(os.environ.get("NEURA_PDF_PROCESS_TIMEOUT", "600"))
+
+
 def _html_to_pdf_subprocess(
     html_path: Path, pdf_path: Path, base_dir: Path, pdf_scale: float | None = None
 ) -> None:
@@ -73,17 +88,34 @@ def _html_to_pdf_subprocess(
     ``asyncio.run()`` is called from a non-main thread inside uvicorn.
 
     In PyInstaller frozen mode, sys.executable is the bundled exe which
-    cannot run .py scripts, so we call the worker function in-process.
+    cannot run .py scripts.  We use multiprocessing.Process instead so the
+    PDF work runs in a separate OS process — freeing the GIL and preventing
+    the main backend from stalling during large chunked renders.
     """
-    # PyInstaller frozen mode: run in-process (no subprocess possible)
+    # PyInstaller frozen mode: use multiprocessing.Process (requires freeze_support)
     if getattr(_sys, "frozen", False):
-        from ._pdf_worker import _convert
-        _run_async(_convert(
-            html_path=str(html_path.resolve()),
-            pdf_path=str(pdf_path.resolve()),
-            base_dir=str((base_dir or html_path.parent).resolve()),
-            pdf_scale=pdf_scale,
-        ))
+        import multiprocessing
+
+        args = (
+            str(html_path.resolve()),
+            str(pdf_path.resolve()),
+            str((base_dir or html_path.parent).resolve()),
+            pdf_scale,
+        )
+        proc = multiprocessing.Process(
+            target=_pdf_worker_mp_target,
+            args=args,
+            daemon=False,
+        )
+        proc.start()
+        proc.join(timeout=_PDF_PROCESS_TIMEOUT)
+        if proc.is_alive():
+            logger.error("PDF worker process timed out after %ds, terminating", _PDF_PROCESS_TIMEOUT)
+            proc.terminate()
+            proc.join(timeout=10)
+            raise RuntimeError(f"PDF worker process timed out after {_PDF_PROCESS_TIMEOUT}s")
+        if proc.exitcode != 0:
+            raise RuntimeError(f"PDF worker process failed with exit code {proc.exitcode}")
         return
 
     import json as _json
@@ -105,7 +137,7 @@ def _html_to_pdf_subprocess(
         [_sys.executable, _PDF_WORKER_SCRIPT, args_json],
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=_PDF_PROCESS_TIMEOUT,
         env=env,
     )
     if result.returncode != 0:

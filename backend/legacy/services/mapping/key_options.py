@@ -32,7 +32,7 @@ def mapping_key_options(
     request: Request,
     connection_id: str | None = None,
     tokens: str | None = None,
-    limit: int = 50,
+    limit: int = 200,
     start_date: str | None = None,
     end_date: str | None = None,
     *,
@@ -83,16 +83,18 @@ def mapping_key_options(
 
     keys_available = load_mapping_keys(template_dir_path)
     if not keys_available:
+        logger.info("mapping_key_options: no keys in mapping_keys.json for %s", template_id)
         return {"keys": {}}
 
     token_list = normalize_tokens_request(tokens, keys_available)
     if not token_list:
+        logger.info("mapping_key_options: empty token_list for %s (keys_available=%s)", template_id, keys_available)
         return {"keys": {}}
 
     try:
         limit_value = int(limit)
     except (TypeError, ValueError):
-        limit_value = 50
+        limit_value = 200
     limit_value = max(1, min(limit_value, 500))
 
     mapping_path = template_dir_path / "mapping_pdf_labels.json"
@@ -180,10 +182,12 @@ def mapping_key_options(
                     try:
                         from backend.legacy.utils.connection_utils import get_loader_for_ref
                         loader = get_loader_for_ref(db_path)
-                        df = loader.frame(parent_table)
-                        columns = [str(c) for c in df.columns]
-                    except Exception:
-                        return [], {"error": "DataFrame schema query failed", "table": parent_table}
+                        # Use pragma_table_info to get column names without loading all rows
+                        info = loader.pragma_table_info(parent_table)
+                        columns = [str(col["name"]) for col in info]
+                    except Exception as exc:
+                        logger.exception("_schema_machine_columns failed for table %s: %s", parent_table, exc)
+                        return [], {"error": f"DataFrame schema query failed: {exc}", "table": parent_table}
                 else:
                     try:
                         safe_table = parent_table.replace("'", "''")
@@ -202,15 +206,6 @@ def mapping_key_options(
                     "column_source": "schema_columns",
                     "row_count": len(limited),
                 }
-
-            # Primary logic: derive machine names from runtime schema columns containing "HRS".
-            if token == "machine_name":
-                rows, token_debug = _schema_machine_columns(con)
-                if binding_source:
-                    token_debug["binding_source"] = binding_source
-                options[token] = rows
-                debug_payload["token_details"][token] = token_debug
-                continue
 
             def _run_query(connection, *, mark_fallback: bool = False, query_db_path=db_path):
                 if _use_df:

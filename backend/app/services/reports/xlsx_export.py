@@ -4,13 +4,22 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+# Prefer xlsxwriter (streaming, constant memory) over openpyxl (in-memory).
+_xlsxwriter = None
 try:
-    import openpyxl  # type: ignore
+    import xlsxwriter as _xlsxwriter  # type: ignore
+except ImportError:
+    _xlsxwriter = None
+
+# Fallback: openpyxl (loads entire workbook into RAM — OOM on large reports).
+_openpyxl = None
+try:
+    import openpyxl as _openpyxl  # type: ignore
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side  # type: ignore
     from openpyxl.utils import get_column_letter  # type: ignore
     from openpyxl.worksheet.table import Table, TableStyleInfo  # type: ignore
 except ImportError:  # pragma: no cover
-    openpyxl = None  # type: ignore
+    _openpyxl = None
     Alignment = None  # type: ignore
     Border = None  # type: ignore
     Font = None  # type: ignore
@@ -25,21 +34,9 @@ from .html_table_parser import extract_first_table, extract_tables, extract_tabl
 logger = logging.getLogger("neura.reports.xlsx")
 
 
-def _auto_column_widths(worksheet) -> None:
-    if get_column_letter is None:  # pragma: no cover
-        return
-    for col_idx in range(1, worksheet.max_column + 1):
-        letter = get_column_letter(col_idx)
-        max_len = 0
-        for cell in worksheet[letter]:
-            value = cell.value
-            if value is None:
-                continue
-            text = str(value)
-            max_len = max(max_len, len(text))
-        width = min(120, max(12, max_len + 2))
-        worksheet.column_dimensions[letter].width = width
-
+# ---------------------------------------------------------------------------
+# Shared HTML → rows parsing
+# ---------------------------------------------------------------------------
 
 def _table_score(table: list[list[str]]) -> int:
     if not table:
@@ -68,19 +65,8 @@ def _looks_like_total_row(row: list[str]) -> bool:
     return False
 
 
-def html_file_to_xlsx(html_path: Path, output_path: Path) -> Optional[Path]:
-    if openpyxl is None:  # pragma: no cover
-        logger.warning(
-            "xlsx_export_unavailable",
-            extra={
-                "event": "xlsx_export_unavailable",
-                "reason": "openpyxl not installed",
-                "html_path": str(html_path),
-            },
-        )
-        return None
-
-    html_text = html_path.read_text(encoding="utf-8", errors="ignore")
+def _parse_html_to_rows(html_text: str):
+    """Parse HTML and return (rows, data_row_positions, preface_ranges, data_header_row_idx, data_thead_count)."""
     tables_with_meta = extract_tables_with_header_counts(html_text)
     tables = [t for t, _ in tables_with_meta]
     thead_counts = [c for _, c in tables_with_meta]
@@ -118,7 +104,6 @@ def html_file_to_xlsx(html_path: Path, output_path: Path) -> Optional[Path]:
             table_end_idx = len(rows)
             if (not is_data_table) and table_end_idx >= table_start_idx:
                 preface_ranges.append((table_start_idx, table_end_idx))
-            # blank row between tables
             rows.append([])
 
         while rows and not rows[-1]:
@@ -127,6 +112,18 @@ def html_file_to_xlsx(html_path: Path, output_path: Path) -> Optional[Path]:
         rows = [[line.strip()] for line in html_text.splitlines() if line.strip()]
         if not rows:
             rows = [["Report output unavailable"]]
+
+    return rows, data_row_positions, preface_ranges, data_header_row_idx
+
+
+# ---------------------------------------------------------------------------
+# xlsxwriter-based export (streaming, constant memory)
+# ---------------------------------------------------------------------------
+
+def _html_file_to_xlsx_xlsxwriter(html_path: Path, output_path: Path) -> Optional[Path]:
+    """Export HTML to XLSX using xlsxwriter (streaming writer, constant memory)."""
+    html_text = html_path.read_text(encoding="utf-8", errors="ignore")
+    rows, data_row_positions, preface_ranges, data_header_row_idx = _parse_html_to_rows(html_text)
 
     data_start = data_row_positions[0] if data_row_positions else None
     data_end = data_row_positions[-1] if data_row_positions else None
@@ -141,7 +138,179 @@ def html_file_to_xlsx(html_path: Path, output_path: Path) -> Optional[Path]:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    wb = openpyxl.Workbook()
+    wb = _xlsxwriter.Workbook(str(output_path), {"constant_memory": True})
+    ws = wb.add_worksheet("Report")
+
+    # Pre-define format objects (xlsxwriter requires this)
+    fmt_default = wb.add_format({
+        "text_wrap": True,
+        "valign": "top",
+        "align": "left",
+    })
+    fmt_bold = wb.add_format({
+        "bold": True,
+        "text_wrap": True,
+        "valign": "top",
+        "align": "left",
+    })
+    fmt_title = wb.add_format({
+        "bold": True,
+        "font_size": 14,
+        "bg_color": "#BDD7EE",
+        "text_wrap": True,
+        "valign": "vcenter",
+        "align": "center",
+    })
+    fmt_preface = wb.add_format({
+        "bold": True,
+        "font_size": 11,
+        "bg_color": "#D9E1F2",
+        "text_wrap": True,
+        "valign": "vcenter",
+        "align": "left",
+    })
+    fmt_data_header = wb.add_format({
+        "bold": True,
+        "font_color": "#FFFFFF",
+        "bg_color": "#2F75B5",
+        "text_wrap": True,
+        "valign": "vcenter",
+        "align": "center",
+    })
+    fmt_border = wb.add_format({
+        "border": 1,
+        "border_color": "#C0C0C0",
+        "text_wrap": True,
+        "valign": "top",
+        "align": "left",
+    })
+
+    # Build set lookups for fast row classification
+    preface_row_set: set[int] = set()
+    first_preface_row = preface_ranges[0][0] if preface_ranges else None
+    for start_idx, end_idx in preface_ranges:
+        for ri in range(start_idx, end_idx + 1):
+            preface_row_set.add(ri)
+
+    # Track max column widths for auto-sizing
+    col_widths: dict[int, int] = {}
+
+    for r_idx, row in enumerate(rows, start=1):
+        if not row:
+            continue
+
+        # Determine format for this row
+        is_preface = r_idx in preface_row_set
+        is_data_header = r_idx == data_header_row_idx
+        is_title = is_preface and r_idx == first_preface_row
+
+        if is_title:
+            row_fmt = fmt_title
+        elif is_preface:
+            row_fmt = fmt_preface
+        elif is_data_header:
+            row_fmt = fmt_data_header
+        elif r_idx == 1:
+            row_fmt = fmt_bold
+        else:
+            row_fmt = fmt_border
+
+        # Note: constant_memory mode doesn't support merge_cells, so preface
+        # rows are written to column 0 only (still styled correctly).
+        for c_idx, value in enumerate(row):
+            ws.write(r_idx - 1, c_idx, value, row_fmt)
+            # Track width
+            text_len = len(str(value)) if value else 0
+            old = col_widths.get(c_idx, 0)
+            if text_len > old:
+                col_widths[c_idx] = text_len
+
+    # Set column widths
+    for c_idx, max_len in col_widths.items():
+        width = min(120, max(12, max_len + 2))
+        ws.set_column(c_idx, c_idx, width)
+
+    # Freeze panes
+    if data_header_row_idx:
+        freeze_row = data_header_row_idx  # 1-based → 0-based is data_header_row_idx - 1, but freeze expects row below
+        ws.freeze_panes(freeze_row, 0)
+    elif data_start:
+        ws.freeze_panes(data_start, 0)
+    elif len(rows) > 1:
+        ws.freeze_panes(1, 0)
+
+    # Autofilter on the data range
+    if data_header_row_idx and data_end:
+        ws.autofilter(data_header_row_idx - 1, 0, data_end - 1, data_max_cols - 1)
+    elif len(rows) > 0:
+        ws.autofilter(0, 0, len(rows) - 1, sheet_width - 1)
+
+    try:
+        wb.close()
+    except Exception as exc:  # pragma: no cover
+        logger.warning(
+            "xlsx_export_save_failed",
+            extra={
+                "event": "xlsx_export_save_failed",
+                "html_path": str(html_path),
+                "xlsx_path": str(output_path),
+                "error": str(exc),
+                "engine": "xlsxwriter",
+            },
+        )
+        return None
+
+    logger.info(
+        "xlsx_export_success",
+        extra={
+            "event": "xlsx_export_success",
+            "html_path": str(html_path),
+            "xlsx_path": str(output_path),
+            "engine": "xlsxwriter",
+        },
+    )
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# openpyxl-based export (fallback — loads everything into RAM)
+# ---------------------------------------------------------------------------
+
+def _auto_column_widths(worksheet) -> None:
+    if get_column_letter is None:  # pragma: no cover
+        return
+    for col_idx in range(1, worksheet.max_column + 1):
+        letter = get_column_letter(col_idx)
+        max_len = 0
+        for cell in worksheet[letter]:
+            value = cell.value
+            if value is None:
+                continue
+            text = str(value)
+            max_len = max(max_len, len(text))
+        width = min(120, max(12, max_len + 2))
+        worksheet.column_dimensions[letter].width = width
+
+
+def _html_file_to_xlsx_openpyxl(html_path: Path, output_path: Path) -> Optional[Path]:
+    """Export HTML to XLSX using openpyxl (in-memory — may OOM on large reports)."""
+    html_text = html_path.read_text(encoding="utf-8", errors="ignore")
+    rows, data_row_positions, preface_ranges, data_header_row_idx = _parse_html_to_rows(html_text)
+
+    data_start = data_row_positions[0] if data_row_positions else None
+    data_end = data_row_positions[-1] if data_row_positions else None
+    data_max_cols = (
+        max(len(rows[idx - 1]) for idx in data_row_positions)
+        if data_row_positions
+        else max((len(r) for r in rows if r), default=1)
+    )
+    data_max_cols = max(1, data_max_cols)
+    sheet_width = max((len(r) for r in rows if r), default=data_max_cols)
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    wb = _openpyxl.Workbook()
     ws = wb.active
     ws.title = "Report"
 
@@ -253,6 +422,7 @@ def html_file_to_xlsx(html_path: Path, output_path: Path) -> Optional[Path]:
                 "html_path": str(html_path),
                 "xlsx_path": str(output_path),
                 "error": str(exc),
+                "engine": "openpyxl",
             },
         )
         return None
@@ -263,6 +433,33 @@ def html_file_to_xlsx(html_path: Path, output_path: Path) -> Optional[Path]:
             "event": "xlsx_export_success",
             "html_path": str(html_path),
             "xlsx_path": str(output_path),
+            "engine": "openpyxl",
         },
     )
     return output_path
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def html_file_to_xlsx(html_path: Path, output_path: Path) -> Optional[Path]:
+    """Convert an HTML report file to XLSX.
+
+    Uses xlsxwriter (streaming, constant memory) when available.
+    Falls back to openpyxl if xlsxwriter is not installed.
+    """
+    if _xlsxwriter is not None:
+        return _html_file_to_xlsx_xlsxwriter(html_path, output_path)
+    if _openpyxl is not None:
+        logger.info("xlsx_export_using_openpyxl_fallback")
+        return _html_file_to_xlsx_openpyxl(html_path, output_path)
+    logger.warning(
+        "xlsx_export_unavailable",
+        extra={
+            "event": "xlsx_export_unavailable",
+            "reason": "neither xlsxwriter nor openpyxl installed",
+            "html_path": str(html_path),
+        },
+    )
+    return None

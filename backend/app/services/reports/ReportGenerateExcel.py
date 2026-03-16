@@ -82,8 +82,8 @@ def _pdf_worker_mp_target(html_path: str, pdf_path: str, base_dir: str, pdf_scal
     ))
 
 
-# Timeout for the PDF worker process (10 minutes — large chunked docs can take a while).
-_PDF_PROCESS_TIMEOUT = int(os.environ.get("NEURA_PDF_PROCESS_TIMEOUT", "600"))
+# Timeout for the PDF worker process (20 minutes — large chunked docs can take a while on slow machines).
+_PDF_PROCESS_TIMEOUT = int(os.environ.get("NEURA_PDF_PROCESS_TIMEOUT", "1200"))
 
 
 def _html_to_pdf_subprocess(

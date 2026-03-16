@@ -117,7 +117,9 @@ class Settings(BaseSettings):
     embedding_model: str = Field(default="all-MiniLM-L6-v2", env="NEURA_EMBEDDING_MODEL")
     embedding_dim: int = Field(default=384, env="NEURA_EMBEDDING_DIM")
 
-    # Database configuration (PostgreSQL)
+    # Database configuration (PostgreSQL or SQLite).
+    # Default is a safe relative path that works in dev. On Tauri/desktop,
+    # _apply_runtime_defaults() resolves it to state_dir (AppData) instead.
     database_url: str = Field(
         default="sqlite+aiosqlite:///backend/state/neurareport.db",
         env="NEURA_DATABASE_URL"
@@ -207,6 +209,28 @@ def _apply_runtime_defaults(settings: Settings) -> Settings:
     settings.uploads_dir.mkdir(parents=True, exist_ok=True)
     settings.excel_uploads_dir.mkdir(parents=True, exist_ok=True)
     settings.state_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resolve database_url for SQLite: if using the default relative path and it
+    # doesn't resolve (e.g. Tauri desktop where CWD != repo root), rewrite to
+    # use state_dir which correctly resolves to AppData on desktop installs.
+    _DEFAULT_DB_URL = "sqlite+aiosqlite:///backend/state/neurareport.db"
+    if settings.database_url == _DEFAULT_DB_URL:
+        relative_db = Path("backend/state/neurareport.db")
+        if not relative_db.parent.exists():
+            try:
+                db_path = settings.state_dir / "neurareport.db"
+                settings.database_url = f"sqlite+aiosqlite:///{db_path}"
+                logger.info("database_url_resolved", extra={
+                    "event": "database_url_resolved",
+                    "path": str(db_path),
+                })
+            except Exception as exc:
+                # Fallback: keep the original default — let SQLAlchemy create it
+                logger.warning("database_url_resolve_failed", extra={
+                    "event": "database_url_resolve_failed",
+                    "error": str(exc),
+                })
+
     return settings
 
 

@@ -320,15 +320,20 @@ def add_middlewares(app: FastAPI, settings: Settings) -> None:
     # Correlation ID and logging middleware (added first, executes last)
     app.add_middleware(CorrelationIdMiddleware)
 
-    # Prometheus metrics middleware (after correlation ID, before other middleware)
+    # Prometheus metrics middleware (after correlation ID, before other middleware).
+    # Auto-detect: only attempt if prometheus_client is actually installed.
     if settings.metrics_enabled:
         try:
-            from backend.app.services.observability.metrics import PrometheusMiddleware, metrics_endpoint
-            app.add_middleware(PrometheusMiddleware, app_name=settings.app_name)
-            app.add_route("/metrics", metrics_endpoint, methods=["GET"])
-            logger.info("metrics_enabled", extra={"event": "metrics_enabled", "app_name": settings.app_name})
+            import importlib.util
+            if importlib.util.find_spec("prometheus_client") is not None:
+                from backend.app.services.observability.metrics import PrometheusMiddleware, metrics_endpoint
+                app.add_middleware(PrometheusMiddleware, app_name=settings.app_name)
+                app.add_route("/metrics", metrics_endpoint, methods=["GET"])
+                logger.info("metrics_enabled", extra={"event": "metrics_enabled", "app_name": settings.app_name})
+            else:
+                logger.info("metrics_skipped", extra={"event": "metrics_skipped", "reason": "prometheus_client not installed"})
         except ImportError:
-            logger.warning("prometheus_client not installed, metrics disabled")
+            logger.warning("metrics_import_failed", extra={"event": "metrics_import_failed"})
 
     # OpenTelemetry tracing (conditional on OTLP endpoint being configured)
     if settings.otlp_endpoint:

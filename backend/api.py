@@ -13,8 +13,10 @@ import sys as _sys
 from backend.app.utils.env_loader import load_env_file as _load_env_file
 
 _loaded_from = _load_env_file()
-print(f"[ENV] Loaded from: {_loaded_from}", file=_sys.stderr)
-print(f"[ENV] NEURA_DEBUG={os.environ.get('NEURA_DEBUG')}", file=_sys.stderr)
+if _loaded_from:
+    print(f"[ENV] Loaded from: {_loaded_from}", file=_sys.stderr)
+if os.environ.get("NEURA_DEBUG"):
+    print(f"[ENV] NEURA_DEBUG={os.environ.get('NEURA_DEBUG')}", file=_sys.stderr)
 
 # Silence noisy deprecations from dependencies during import/test
 warnings.filterwarnings("ignore", message=".*on_event is deprecated.*", category=DeprecationWarning)
@@ -159,7 +161,10 @@ async def lifespan(app: FastAPI):
     try:
         await init_auth_db()
     except Exception as exc:
-        logger.warning("auth_db_init_failed", extra={"event": "auth_db_init_failed", "error": str(exc)})
+        # Auth is optional on desktop/Tauri — log at info level and continue.
+        # The database_url fix (state_dir resolution) should prevent this in
+        # most cases; if it still fails, the app runs fine without auth tables.
+        logger.info("auth_db_init_skipped", extra={"event": "auth_db_init_skipped", "error": str(exc)})
 
     # Seed sample data for new installations
     seed_enabled = os.getenv("NEURA_SEED_DATA", "true").lower() in {"1", "true", "yes"}

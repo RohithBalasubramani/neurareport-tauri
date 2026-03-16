@@ -124,13 +124,25 @@ class SQLiteDataFrameLoader:
         params: list[str] = []
         if start_date:
             conditions.append(f'"{quoted_col}" >= ?')
-            params.append(str(start_date))
+            sd = str(start_date).strip()
+            # Normalise to T separator so string comparison works
+            # correctly against DB values like 2025-10-07T19:38:18+05:30
+            if " " in sd and "T" not in sd:
+                sd = sd.replace(" ", "T", 1)
+            params.append(sd)
         if end_date:
             conditions.append(f'"{quoted_col}" <= ?')
-            # Snap to end of day for the end_date
             ed = str(end_date).strip()
-            if len(ed) == 10:  # date only, no time part
-                ed = ed + "T23:59:59"
+            if " " in ed and "T" not in ed:
+                ed = ed.replace(" ", "T", 1)
+            # Snap to end of the specified precision so the boundary
+            # is inclusive (e.g. 18:00 includes 18:00:30+05:30).
+            if len(ed) == 10:       # YYYY-MM-DD
+                ed = ed + "T23:59:59.999999"
+            elif len(ed) == 16:     # YYYY-MM-DDTHH:MM
+                ed = ed + ":59.999999"
+            elif len(ed) == 19:     # YYYY-MM-DDTHH:MM:SS
+                ed = ed + ".999999"
             params.append(ed)
 
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""

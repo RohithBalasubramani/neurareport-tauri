@@ -932,31 +932,16 @@ class ContractAdapter:
         if not source_table:
             return pd.DataFrame()
 
-        # When dates are available AND the table has a known date column,
-        # load directly from SQLite with a WHERE clause to avoid the row_limit
-        # truncation that can silently discard data beyond the first N rows.
-        date_col = self._date_columns.get(source_table.lower()) or self._date_columns.get(source_table)
-        use_filtered_load = (
-            date_col
-            and (start_date or end_date)
-            and hasattr(loader, "frame_date_filtered")
-        )
-
         try:
-            if use_filtered_load:
-                df = loader.frame_date_filtered(source_table, date_col, start_date, end_date)
-                logger.info("resolve_row_data: loaded %d rows from %s (date-filtered at SQL level)", len(df), source_table)
-            else:
-                df = loader.frame(source_table).copy()
-                logger.info("resolve_row_data: loaded %d rows from %s", len(df), source_table)
+            df = loader.frame(source_table).copy()
+            logger.info("resolve_row_data: loaded %d rows from %s", len(df), source_table)
         except Exception:
             logger.exception("resolve_row_data: failed to load table %r", source_table)
             return pd.DataFrame()
 
-        # Apply date filter (still needed for non-filtered loads or to refine tz-aware comparisons)
-        if not use_filtered_load:
-            df = self._apply_date_filter_df(df, source_table, start_date, end_date)
-            logger.info("resolve_row_data: %d rows after date filter (start=%s end=%s)", len(df), start_date, end_date)
+        # Apply date filter using DataFrame-level coercion (handles all formats)
+        df = self._apply_date_filter_df(df, source_table, start_date, end_date)
+        logger.info("resolve_row_data: %d rows after date filter (start=%s end=%s)", len(df), start_date, end_date)
 
         # Apply value filters
         if value_filters:

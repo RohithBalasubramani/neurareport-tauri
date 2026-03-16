@@ -7,6 +7,7 @@ here without touching the PDF-focused discovery module.
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from collections import Counter
@@ -15,6 +16,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from .contract_adapter import ContractAdapter
 from .discovery_metrics import (
@@ -72,14 +75,22 @@ def _infer_primary_table(mapping_section: Mapping[str, str] | None) -> str | Non
 
 
 def _snap_end_of_day(dt: datetime) -> datetime:
-    """If *dt* has no time component (midnight), snap to 23:59:59.999999.
+    """Snap an end-date to the end of its specified precision.
 
-    This ensures date-only end-dates like ``2026-02-19`` include all
-    records on that day instead of only those at exactly midnight.
+    - Date-only  (00:00:00.000000) → 23:59:59.999999  (include whole day)
+    - HH:MM only (ss=0, us=0)      → HH:MM:59.999999  (include whole minute)
+    - HH:MM:SS   (us=0)            → HH:MM:SS.999999  (include whole second)
+    - Already has microseconds      → unchanged
+
+    This ensures ``2026-02-19 18:00`` includes records at 18:00:30, etc.
     """
-    if dt.hour == 0 and dt.minute == 0 and dt.second == 0 and dt.microsecond == 0:
+    if dt.microsecond != 0:
+        return dt
+    if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
         return dt.replace(hour=23, minute=59, second=59, microsecond=999999)
-    return dt
+    if dt.second == 0:
+        return dt.replace(second=59, microsecond=999999)
+    return dt.replace(microsecond=999999)
 
 
 def _parse_date_like(value) -> datetime | None:
@@ -571,6 +582,43 @@ def discover_batches_and_counts(
 
     if not parent_ids and child_ids:
         parent_ids = list(child_ids)
+
+    # Fast path: when there are a huge number of batches (e.g. 100K+ with
+    # rowid-based keys), building per-batch metadata/aggregates/metrics is
+    # extremely slow and the frontend cannot display them anyway.  Return a
+    # lightweight response with counts and a truncated batch list.
+    _DISCOVERY_BATCH_LIMIT = 10_000
+    if len(parent_ids) > _DISCOVERY_BATCH_LIMIT:
+        logger.info(
+            "discovery_fast_path total_batches=%d limit=%d",
+            len(parent_ids), _DISCOVERY_BATCH_LIMIT,
+        )
+        batches: List[Dict[str, object]] = []
+        rows_total = 0
+        for bid in parent_ids:
+            parent_cnt = int(parent_counts.get(bid, 0))
+            child_cnt = int(child_counts.get(bid, 0)) if has_child else parent_cnt
+            rows_total += child_cnt
+            if len(batches) < _DISCOVERY_BATCH_LIMIT:
+                batches.append({"id": bid, "parent": parent_cnt, "rows": child_cnt, "selected": True})
+        return {
+            "batches": batches,
+            "batches_count": len(parent_ids),
+            "rows_total": rows_total,
+            "batch_metadata": {},
+            "field_catalog": [],
+            "batch_metrics": [],
+            "discovery_schema": {},
+            "numeric_bins": {},
+            "category_groups": {},
+            "data_stats": {
+                "batch_count": len(parent_ids),
+                "rows_total": rows_total,
+                "rows_stats": {},
+                "parent_stats": {},
+            },
+            "_truncated": True,
+        }
 
     # Lightweight metadata for resampling (time/category per batch id).
     batch_metadata: Dict[str, Dict[str, object]] = {}

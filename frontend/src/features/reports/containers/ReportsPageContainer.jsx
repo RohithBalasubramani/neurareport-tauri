@@ -24,6 +24,7 @@ import {
   List,
   ListItem,
   ListItemText,
+  InputAdornment,
   useTheme,
   alpha,
   styled,
@@ -38,6 +39,7 @@ import SmartToyIcon from '@mui/icons-material/SmartToy'
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward'
 import TodayIcon from '@mui/icons-material/Today'
 import DateRangeIcon from '@mui/icons-material/DateRange'
+import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import FilterListIcon from '@mui/icons-material/FilterList'
 import DescriptionIcon from '@mui/icons-material/Description'
 import RefreshIcon from '@mui/icons-material/Refresh'
@@ -312,6 +314,13 @@ const AdvancedToggle = styled(Box)(({ theme }) => ({
 
 const formatDateForInput = (date) => date.toISOString().split('T')[0]
 
+/** Compose date+time for the API. Returns "YYYY-MM-DD HH:MM" when time is set, "YYYY-MM-DD" otherwise. */
+const composeDateTimeString = (dateStr, timeStr) => {
+  if (!dateStr) return ''
+  if (!timeStr) return dateStr
+  return `${dateStr} ${timeStr}`
+}
+
 const getDatePresets = () => {
   const today = new Date()
   const startOfWeek = new Date(today)
@@ -368,6 +377,8 @@ export default function ReportsPage() {
   const [selectedTemplate, setSelectedTemplate] = useState(searchParams.get('template') || '')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
+  const [startTime, setStartTime] = useState('')
+  const [endTime, setEndTime] = useState('')
   const [datePreset, setDatePreset] = useState('thisMonth')
   const [keyValues, setKeyValues] = useState({})
   const [loading, setLoading] = useState(false)
@@ -485,6 +496,8 @@ export default function ReportsPage() {
       if (preset) {
         setStartDate(preset.start)
         setEndDate(preset.end)
+        setStartTime('')
+        setEndTime('')
       }
     }
   }, [])
@@ -510,9 +523,13 @@ export default function ReportsPage() {
       toast.show('Select at least one batch to run', 'error')
       return
     }
-    if (startDate && endDate && new Date(startDate) > new Date(endDate)) {
-      toast.show('Start date must be before or equal to end date', 'error')
-      return
+    {
+      const sf = composeDateTimeString(startDate, startTime)
+      const ef = composeDateTimeString(endDate, endTime)
+      if (sf && ef && new Date(sf) > new Date(ef)) {
+        toast.show('Start date/time must be before or equal to end date/time', 'error')
+        return
+      }
     }
 
     await execute({
@@ -542,8 +559,8 @@ export default function ReportsPage() {
             templateId: selectedTemplate,
             templateName: template?.name,
             connectionId: activeConnection.id,
-            startDate: startDate || undefined,
-            endDate: endDate || undefined,
+            startDate: composeDateTimeString(startDate, startTime) || undefined,
+            endDate: composeDateTimeString(endDate, endTime) || undefined,
             keyValues: (() => { const kv = Object.fromEntries(Object.entries(keyValues).filter(([, v]) => Array.isArray(v) ? v.length > 0 : !!v)); return Object.keys(kv).length > 0 ? kv : undefined })(),
             batchIds: useSelectedBatches ? selectedBatches : undefined,
             kind: template?.kind || 'pdf',
@@ -563,7 +580,7 @@ export default function ReportsPage() {
         }
       },
     })
-  }, [selectedTemplate, activeConnection?.id, templates, startDate, endDate, keyValues, discovery, selectedBatches, toast, celebrate, execute])
+  }, [selectedTemplate, activeConnection?.id, templates, startDate, endDate, startTime, endTime, keyValues, discovery, selectedBatches, toast, celebrate, execute])
 
   const keyFields = Object.keys(keyOptions)
 
@@ -576,9 +593,13 @@ export default function ReportsPage() {
       toast.show('Provide a start and end date to discover batches', 'error')
       return
     }
-    if (new Date(startDate) > new Date(endDate)) {
-      toast.show('Start date must be before or equal to end date', 'error')
-      return
+    {
+      const sf = composeDateTimeString(startDate, startTime)
+      const ef = composeDateTimeString(endDate, endTime)
+      if (new Date(sf) > new Date(ef)) {
+        toast.show('Start date/time must be before or equal to end date/time', 'error')
+        return
+      }
     }
     await execute({
       type: InteractionType.ANALYZE,
@@ -599,8 +620,8 @@ export default function ReportsPage() {
           const data = await api.discoverReports({
             templateId: selectedTemplate,
             connectionId: activeConnection.id,
-            startDate,
-            endDate,
+            startDate: composeDateTimeString(startDate, startTime),
+            endDate: composeDateTimeString(endDate, endTime),
             keyValues: Object.keys(keyValues).length > 0 ? keyValues : undefined,
             kind: template?.kind || 'pdf',
           })
@@ -616,7 +637,7 @@ export default function ReportsPage() {
         }
       },
     })
-  }, [selectedTemplate, activeConnection?.id, startDate, endDate, keyValues, templates, toast, execute])
+  }, [selectedTemplate, activeConnection?.id, startDate, endDate, startTime, endTime, keyValues, templates, toast, execute])
 
   const fetchRunHistory = useCallback(async () => {
     setHistoryLoading(true)
@@ -861,8 +882,8 @@ export default function ReportsPage() {
               />
             </Stack>
 
-            {/* Date inputs */}
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+            {/* Date & time inputs */}
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="flex-start">
               <StyledTextField
                 label="Start Date"
                 type="date"
@@ -876,6 +897,25 @@ export default function ReportsPage() {
                 size="small"
               />
               <StyledTextField
+                label="Start Time"
+                type="time"
+                value={startTime}
+                onChange={(e) => {
+                  setStartTime(e.target.value)
+                  setDatePreset('custom')
+                }}
+                InputLabelProps={{ shrink: true }}
+                size="small"
+                sx={{ maxWidth: { sm: 160 }, minWidth: 130 }}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <AccessTimeIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
+                    </InputAdornment>
+                  ),
+                }}
+              />
+              <StyledTextField
                 label="End Date"
                 type="date"
                 value={endDate}
@@ -887,7 +927,29 @@ export default function ReportsPage() {
                 fullWidth
                 size="small"
               />
+              <StyledTextField
+                label="End Time"
+                type="time"
+                value={endTime}
+                onChange={(e) => {
+                  setEndTime(e.target.value)
+                  setDatePreset('custom')
+                }}
+                InputLabelProps={{ shrink: true }}
+                size="small"
+                sx={{ maxWidth: { sm: 160 }, minWidth: 130 }}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <AccessTimeIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
+                    </InputAdornment>
+                  ),
+                }}
+              />
             </Stack>
+            <Typography variant="caption" sx={{ color: 'text.secondary', mt: -0.5 }}>
+              Time is optional — leave blank to include all records for the selected dates.
+            </Typography>
 
             {/* Key field filters (conditional) */}
             {keyFields.length > 0 && (

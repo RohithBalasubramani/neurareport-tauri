@@ -1,4 +1,5 @@
 import { Box, Typography, Button, Chip, Alert } from '@mui/material'
+import { useNavigate } from 'react-router-dom'
 import SensorsIcon from '@mui/icons-material/Sensors'
 import RadarIcon from '@mui/icons-material/Radar'
 import { GlassCard } from '@/styles/components'
@@ -9,6 +10,7 @@ export default function LoggerDataView({
   discovering,
   handleDiscover,
 }) {
+  const navigate = useNavigate()
   if (!selectedConnectionId) {
     return (
       <GlassCard sx={{ textAlign: 'center', py: 6 }}>
@@ -65,21 +67,21 @@ export default function LoggerDataView({
       <Box sx={{ mt: 3, display: 'flex', gap: 2 }}>
         <Button
           variant="outlined"
-          onClick={() => window.location.href = '/neurareport/reports'}
+          onClick={() => navigate('/reports')}
           size="small"
         >
           Go to Reports
         </Button>
         <Button
           variant="outlined"
-          onClick={() => window.location.href = '/neurareport/templates/create'}
+          onClick={() => navigate('/templates/create')}
           size="small"
         >
           Create Template
         </Button>
         <Button
           variant="outlined"
-          onClick={() => window.location.href = '/neurareport/connections'}
+          onClick={() => navigate('/connections')}
           size="small"
         >
           Manage Connections

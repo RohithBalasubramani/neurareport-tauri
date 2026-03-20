@@ -5,9 +5,14 @@ import {
   listConnections,
 } from '@/api/client'
 import { useAppStore } from '@/stores'
+import { isTauri } from '@/utils/tauri'
 
-// Logger frontend URL — embedded as iframe plugin
-export const LOGGER_URL = 'http://localhost:9847?embedded=true'
+// Logger frontend URL — embedded as iframe plugin.
+// In Tauri desktop mode Logger is not available (no separate dev server),
+// so we return a sentinel that will always fail the health check gracefully.
+export const LOGGER_URL = isTauri()
+  ? 'about:blank'
+  : (import.meta.env.VITE_LOGGER_URL || 'http://localhost:9847?embedded=true')
 
 export function useLoggerPage() {
   const [viewMode, setViewMode] = useState('plugin') // 'plugin' | 'data'

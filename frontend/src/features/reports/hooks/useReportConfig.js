@@ -4,7 +4,7 @@ import { useAppStore } from '@/stores'
 import { useToast } from '@/components/ToastProvider'
 import * as api from '@/api/client'
 
-export default function useReportConfig() {
+export default function useReportConfig({ startDate, endDate } = {}) {
   const [searchParams] = useSearchParams()
   const toast = useToast()
 
@@ -59,10 +59,28 @@ export default function useReportConfig() {
         const result = await api.fetchTemplateKeyOptions(selectedTemplate, {
           connectionId: activeConnection.id,
           kind: template?.kind || 'pdf',
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
         })
 
         if (requestId === keyOptionsRequestIdRef.current) {
           setKeyOptions(result.keys || {})
+          // Clear any key selections that are no longer valid for this date range
+          setKeyValues((prev) => {
+            const validKeys = result.keys || {}
+            const updated = {}
+            for (const [key, val] of Object.entries(prev)) {
+              if (!(key in validKeys)) continue
+              const available = validKeys[key] || []
+              if (Array.isArray(val)) {
+                const filtered = val.filter((v) => available.includes(v))
+                if (filtered.length > 0) updated[key] = filtered
+              } else if (available.includes(val)) {
+                updated[key] = val
+              }
+            }
+            return updated
+          })
         }
       } catch (err) {
         if (requestId === keyOptionsRequestIdRef.current) {
@@ -72,7 +90,7 @@ export default function useReportConfig() {
       }
     }
     fetchKeyOptions()
-  }, [selectedTemplate, activeConnection?.id, templates, toast])
+  }, [selectedTemplate, activeConnection?.id, templates, toast, startDate, endDate])
 
   const handleTemplateChange = useCallback((event) => {
     setSelectedTemplate(event.target.value)

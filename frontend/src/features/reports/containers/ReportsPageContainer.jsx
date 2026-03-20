@@ -38,11 +38,14 @@ export default function ReportsPage() {
   // Success celebration
   const { celebrating, celebrate, onComplete: onCelebrationComplete } = useCelebration()
 
-  // Config: templates, connection, key filters
-  const config = useReportConfig()
-
-  // Date range state
+  // Date range state (initialized first so key options can filter by dates)
   const dateRange = useReportDateRange()
+
+  // Config: templates, connection, key filters (date-aware)
+  const config = useReportConfig({
+    startDate: dateRange.startDate,
+    endDate: dateRange.endDate,
+  })
 
   // Batch discovery
   const disc = useReportDiscovery({

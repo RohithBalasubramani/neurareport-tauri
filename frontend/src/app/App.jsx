@@ -176,7 +176,7 @@ function StaticErrorFallback() {
 export default function App() {
   return (
     <ErrorBoundary fallback={StaticErrorFallback}>
-      <BrowserRouter basename={import.meta.env.VITE_ROUTER_BASENAME || import.meta.env.BASE_URL.replace(/\/+$/, '') || ''}>
+      <BrowserRouter basename={import.meta.env.VITE_ROUTER_BASENAME ?? ''}>
         <AppProviders>
           <OperationHistoryProvider>
             <UXGovernanceProvider auditClient={intentAuditClient}>

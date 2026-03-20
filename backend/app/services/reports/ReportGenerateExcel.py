@@ -1100,8 +1100,8 @@ def fill_and_print(
     start_has_time = _has_time_component(START_DATE, start_dt)
     end_has_time = _has_time_component(END_DATE, end_dt)
 
-    START_DATE_KEYS = {"fromdate", "datefrom", "startdate", "periodstart", "rangefrom", "fromdt", "startdt"}
-    END_DATE_KEYS = {"todate", "dateto", "enddate", "periodend", "rangeto", "todt", "enddt"}
+    START_DATE_KEYS = {"fromdate", "datefrom", "startdate", "periodstart", "rangefrom", "fromdt", "startdt", "fromdatetime", "startdatetime", "datetimefrom"}
+    END_DATE_KEYS = {"todate", "dateto", "enddate", "periodend", "rangeto", "todt", "enddt", "todatetime", "enddatetime", "datetimeto"}
     PRINT_DATE_KEYS = {
         "printdate",
         "printedon",

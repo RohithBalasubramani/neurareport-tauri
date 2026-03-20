@@ -7,7 +7,6 @@
  * - Ongoing state visibility (loading / progress / pending)
  * - Optimize perceived speed
  */
-import { useState, useEffect, useMemo } from 'react'
 import {
   Box,
   Typography,
@@ -18,25 +17,8 @@ import {
   Paper,
   useTheme,
   alpha,
-  keyframes,
 } from '@mui/material'
-import {
-  CheckCircle as SuccessIcon,
-  Error as ErrorIcon,
-} from '@mui/icons-material'
-import { neutral, palette } from '@/app/theme'
-import { shimmer } from '@/styles'
-
-// Local animations — differ from shared versions
-const pulse = keyframes`
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
-`
-
-const scaleIn = keyframes`
-  from { transform: scale(0.8); opacity: 0; }
-  to { transform: scale(1); opacity: 1; }
-`
+import { neutral } from '@/app/theme'
 
 /**
  * Full-page progress overlay
@@ -163,8 +145,6 @@ export function InlineProgress({
   size = 'medium',
   color = 'primary',
 }) {
-  const theme = useTheme()
-
   const sizeConfig = {
     small: { spinner: 16, text: 'caption', spacing: 1 },
     medium: { spinner: 24, text: 'body2', spacing: 1.5 },
@@ -198,217 +178,7 @@ export function InlineProgress({
   )
 }
 
-/**
- * Skeleton loader for content placeholders
- */
-export function SkeletonLoader({
-  variant = 'text',
-  width,
-  height,
-  lines = 1,
-  animation = 'shimmer',
-}) {
-  const theme = useTheme()
-
-  const animationStyle = animation === 'shimmer'
-    ? {
-        background: `linear-gradient(90deg,
-          ${alpha(theme.palette.text.primary, 0.06)} 25%,
-          ${alpha(theme.palette.text.primary, 0.12)} 50%,
-          ${alpha(theme.palette.text.primary, 0.06)} 75%)`,
-        backgroundSize: '200% 100%',
-        animation: `${shimmer} 1.5s infinite`,
-      }
-    : {
-        bgcolor: alpha(theme.palette.text.primary, 0.08),
-        animation: `${pulse} 1.5s infinite`,
-      }
-
-  if (variant === 'text') {
-    return (
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-        {Array.from({ length: lines }).map((_, i) => (
-          <Box
-            key={i}
-            sx={{
-              height: height || 16,
-              width: i === lines - 1 && lines > 1 ? '60%' : width || '100%',
-              borderRadius: 1,
-              ...animationStyle,
-            }}
-          />
-        ))}
-      </Box>
-    )
-  }
-
-  if (variant === 'circular') {
-    return (
-      <Box
-        sx={{
-          width: width || 40,
-          height: height || 40,
-          borderRadius: '50%',
-          ...animationStyle,
-        }}
-      />
-    )
-  }
-
-  if (variant === 'rectangular') {
-    return (
-      <Box
-        sx={{
-          width: width || '100%',
-          height: height || 120,
-          borderRadius: 1,  // Figma spec: 8px
-          ...animationStyle,
-        }}
-      />
-    )
-  }
-
-  return null
-}
-
-/**
- * Operation completion feedback
- * Shows success/error state after an operation
- */
-export function OperationComplete({
-  show,
-  success = true,
-  message,
-  onDismiss,
-  autoDismiss = true,
-  dismissDelay = 2000,
-}) {
-  const theme = useTheme()
-
-  useEffect(() => {
-    if (show && autoDismiss && onDismiss) {
-      const timer = setTimeout(onDismiss, dismissDelay)
-      return () => clearTimeout(timer)
-    }
-  }, [show, autoDismiss, onDismiss, dismissDelay])
-
-  if (!show) return null
-
-  const config = success
-    ? {
-        icon: SuccessIcon,
-        color: theme.palette.text.secondary,
-        defaultMessage: 'Done!',
-      }
-    : {
-        icon: ErrorIcon,
-        color: theme.palette.text.secondary,
-        defaultMessage: 'Something went wrong',
-      }
-
-  const Icon = config.icon
-
-  return (
-    <Fade in={show}>
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 1,
-          animation: `${scaleIn} 0.3s ease-out`,
-        }}
-      >
-        <Icon sx={{ color: config.color }} />
-        <Typography variant="body2" fontWeight={500} color={config.color}>
-          {message || config.defaultMessage}
-        </Typography>
-      </Box>
-    </Fade>
-  )
-}
-
-/**
- * Step progress indicator
- * For multi-step operations
- */
-export function StepProgress({
-  steps,
-  currentStep,
-  status = 'in_progress', // 'pending' | 'in_progress' | 'completed' | 'error'
-}) {
-  const theme = useTheme()
-
-  const getStepStatus = (index) => {
-    if (index < currentStep) return 'completed'
-    if (index === currentStep) return status
-    return 'pending'
-  }
-
-  const getStepColor = (stepStatus) => {
-    switch (stepStatus) {
-      case 'completed':
-        return theme.palette.mode === 'dark' ? neutral[500] : neutral[700]
-      case 'in_progress':
-        return theme.palette.mode === 'dark' ? neutral[300] : neutral[900]
-      case 'error':
-        return theme.palette.text.secondary
-      default:
-        return alpha(theme.palette.text.primary, 0.3)
-    }
-  }
-
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      {steps.map((step, index) => {
-        const stepStatus = getStepStatus(index)
-        const color = getStepColor(stepStatus)
-
-        return (
-          <Box
-            key={index}
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 2,
-            }}
-          >
-            <Box
-              sx={{
-                width: 24,
-                height: 24,
-                borderRadius: '50%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                bgcolor: stepStatus === 'completed' ? color : 'transparent',
-                border: `2px solid ${color}`,
-                transition: 'all 0.3s ease',
-              }}
-            >
-              {stepStatus === 'completed' ? (
-                <SuccessIcon sx={{ fontSize: 16, color: 'common.white' }} />
-              ) : stepStatus === 'in_progress' ? (
-                <CircularProgress size={12} sx={{ color }} />
-              ) : (
-                <Typography variant="caption" fontWeight={600} sx={{ color }}>
-                  {index + 1}
-                </Typography>
-              )}
-            </Box>
-            <Typography
-              variant="body2"
-              sx={{
-                color: stepStatus === 'pending'
-                  ? alpha(theme.palette.text.primary, 0.5)
-                  : theme.palette.text.primary,
-                fontWeight: stepStatus === 'in_progress' ? 600 : 400,
-              }}
-            >
-              {step}
-            </Typography>
-          </Box>
-        )
-      })}
-    </Box>
-  )
-}
+// Re-export sub-components for backward compatibility
+export { default as SkeletonLoader } from './SkeletonLoader'
+export { default as OperationComplete } from './OperationComplete'
+export { default as StepProgress } from './StepProgress'

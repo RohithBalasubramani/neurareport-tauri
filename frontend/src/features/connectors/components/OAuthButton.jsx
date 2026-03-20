@@ -11,88 +11,19 @@ import {
   Tooltip,
   useTheme,
   alpha,
-  styled,
 } from '@mui/material'
 import {
-  Google as GoogleIcon,
   Cloud as CloudIcon,
   CheckCircle as ConnectedIcon,
   Refresh as RefreshIcon,
 } from '@mui/icons-material'
 import { useInteraction, InteractionType, Reversibility } from '@/components/ux/governance'
 import { getOAuthPopupUrl } from '@/api/connectors'
-import { neutral, palette, secondary } from '@/app/theme'
+import { neutral } from '@/app/theme'
+import { OAUTH_PROVIDERS, isOAuthProvider, getProviderConfig } from './oauthProviderConfig'
+import { OAuthButtonStyled } from './oauthButtonStyles'
 
-// =============================================================================
-// STYLED COMPONENTS
-// =============================================================================
-
-const OAuthButtonStyled = styled(Button, {
-  shouldForwardProp: (prop) => !['connected', 'providerColor'].includes(prop),
-})(({ theme, connected, providerColor }) => ({
-  borderRadius: 8,
-  textTransform: 'none',
-  fontWeight: 500,
-  padding: theme.spacing(1.5, 3),
-  backgroundColor: connected
-    ? alpha(theme.palette.text.secondary, 0.05)
-    : alpha(providerColor || (theme.palette.mode === 'dark' ? neutral[500] : neutral[700]), 0.1),
-  color: connected
-    ? theme.palette.text.secondary
-    : providerColor || (theme.palette.mode === 'dark' ? neutral[500] : neutral[700]),
-  border: `1px solid ${alpha(connected ? theme.palette.text.secondary : providerColor || (theme.palette.mode === 'dark' ? neutral[500] : neutral[700]), 0.3)}`,
-  '&:hover': {
-    backgroundColor: alpha(connected ? theme.palette.text.secondary : providerColor || (theme.palette.mode === 'dark' ? neutral[500] : neutral[700]), 0.15),
-  },
-  '&:disabled': {
-    opacity: 0.6,
-  },
-}))
-
-// =============================================================================
-// PROVIDER CONFIGS
-// =============================================================================
-
-const OAUTH_PROVIDERS = {
-  google_drive: {
-    name: 'Google Drive',
-    icon: GoogleIcon,
-    color: secondary.cyan[500],
-    scopes: ['drive.readonly', 'drive.file'],
-  },
-  dropbox: {
-    name: 'Dropbox',
-    icon: CloudIcon,
-    color: secondary.violet[500],
-    scopes: ['files.content.read', 'files.content.write'],
-  },
-  onedrive: {
-    name: 'OneDrive',
-    icon: CloudIcon,
-    color: secondary.slate[500],
-    scopes: ['Files.Read', 'Files.ReadWrite'],
-  },
-  s3: {
-    name: 'Amazon S3',
-    icon: CloudIcon,
-    color: secondary.fuchsia[500],
-    scopes: [],
-    // S3 uses access keys, not OAuth
-    authType: 'credentials',
-  },
-  azure_blob: {
-    name: 'Azure Blob',
-    icon: CloudIcon,
-    color: secondary.teal[500],
-    scopes: [],
-    // Azure can use connection strings or OAuth
-    authType: 'mixed',
-  },
-}
-
-// =============================================================================
-// MAIN COMPONENT
-// =============================================================================
+export { isOAuthProvider, getProviderConfig }
 
 export default function OAuthButton({
   provider,
@@ -109,7 +40,6 @@ export default function OAuthButton({
   const [authWindow, setAuthWindow] = useState(null)
   const checkClosedRef = useRef(null)
 
-  // Cleanup interval on unmount
   useEffect(() => {
     return () => {
       if (checkClosedRef.current) clearInterval(checkClosedRef.current)
@@ -124,14 +54,10 @@ export default function OAuthButton({
   }
 
   const ProviderIcon = config.icon
-
-  // Check if token is expired
   const isExpired = expiresAt && new Date(expiresAt) < new Date()
 
-  // Listen for OAuth callback
   useEffect(() => {
     const handleMessage = (event) => {
-      // Verify origin for security
       if (event.origin !== window.location.origin) return
 
       if (event.data?.type === 'oauth_callback' && event.data?.provider === provider) {
@@ -222,7 +148,6 @@ export default function OAuthButton({
     })
   }, [config.name, execute, onRefreshToken, provider])
 
-  // For non-OAuth providers (S3, etc.)
   if (config.authType === 'credentials') {
     return (
       <Box>
@@ -267,19 +192,4 @@ export default function OAuthButton({
       )}
     </Box>
   )
-}
-
-/**
- * Check if a provider uses OAuth
- */
-export function isOAuthProvider(provider) {
-  const config = OAUTH_PROVIDERS[provider]
-  return config && config.authType !== 'credentials'
-}
-
-/**
- * Get provider configuration
- */
-export function getProviderConfig(provider) {
-  return OAUTH_PROVIDERS[provider] || null
 }

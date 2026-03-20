@@ -11,7 +11,6 @@ import {
   TextField,
   Button,
   List,
-  ListItem,
   ListItemIcon,
   ListItemText,
   Chip,
@@ -22,63 +21,11 @@ import {
 } from '@mui/material'
 import {
   AutoAwesome as AIIcon,
-  Speed as KpiIcon,
   ShowChart as TrendIcon,
-  CompareArrows as CompareIcon,
-  PieChart as DistributionIcon,
-  Warning as AlertsIcon,
-  Timeline as TimelineIcon,
-  Notes as NarrativeIcon,
-  ViewList as EventLogIcon,
-  BarChart as BarIcon,
-  Layers as CompositionIcon,
-  AccountTree as SankeyIcon,
-  GridView as HeatmapIcon,
-  Build as DiagnosticIcon,
-  HelpOutline as UncertaintyIcon,
-  People as PeopleIcon,
-  Devices as DeviceIcon,
-  Public as GlobeIcon,
-  Chat as ChatIcon,
-  SmartToy as AgentIcon,
-  Lock as VaultIcon,
-  Hexagon as HexIcon,
-  Hub as NetworkIcon,
-  AreaChart as CumulativeIcon,
   Add as AddIcon,
 } from '@mui/icons-material'
 import { selectWidgets, packGrid } from '../../../api/widgets'
-
-// ── Scenario → Icon mapping ────────────────────────────────────────────────
-
-const SCENARIO_ICONS = {
-  kpi: KpiIcon,
-  trend: TrendIcon,
-  'trend-multi-line': TrendIcon,
-  'trends-cumulative': CumulativeIcon,
-  comparison: CompareIcon,
-  distribution: DistributionIcon,
-  composition: CompositionIcon,
-  'category-bar': BarIcon,
-  alerts: AlertsIcon,
-  timeline: TimelineIcon,
-  eventlogstream: EventLogIcon,
-  narrative: NarrativeIcon,
-  'flow-sankey': SankeyIcon,
-  'matrix-heatmap': HeatmapIcon,
-  diagnosticpanel: DiagnosticIcon,
-  uncertaintypanel: UncertaintyIcon,
-  peopleview: PeopleIcon,
-  peoplehexgrid: HexIcon,
-  peoplenetwork: NetworkIcon,
-  edgedevicepanel: DeviceIcon,
-  supplychainglobe: GlobeIcon,
-  chatstream: ChatIcon,
-  agentsview: AgentIcon,
-  vaultview: VaultIcon,
-}
-
-// ── Styled Components ──────────────────────────────────────────────────────
+import { SCENARIO_ICONS } from './scenarioIcons'
 
 const SuggestionContainer = styled(Box)(({ theme }) => ({
   display: 'flex',
@@ -86,12 +33,14 @@ const SuggestionContainer = styled(Box)(({ theme }) => ({
   gap: theme.spacing(1.5),
 }))
 
-const SuggestionItem = styled(ListItem)(({ theme }) => ({
+const SuggestionItem = styled('li')(({ theme }) => ({
   borderRadius: 8,
   border: `1px solid ${theme.palette.divider}`,
   marginBottom: theme.spacing(0.5),
   cursor: 'pointer',
   transition: 'all 0.15s cubic-bezier(0.22, 1, 0.36, 1)',
+  display: 'flex',
+  alignItems: 'center',
   '&:hover': {
     backgroundColor:
       theme.palette.mode === 'dark'
@@ -100,8 +49,6 @@ const SuggestionItem = styled(ListItem)(({ theme }) => ({
     borderColor: theme.palette.primary.main,
   },
 }))
-
-// ── Main Component ─────────────────────────────────────────────────────────
 
 export default function AIWidgetSuggestion({ onAddWidgets, onAddSingleWidget }) {
   const [query, setQuery] = useState('')
@@ -208,7 +155,6 @@ export default function AIWidgetSuggestion({ onAddWidgets, onAddSingleWidget }) 
               return (
                 <SuggestionItem
                   key={widget.id || i}
-                  disableGutters
                   sx={{ px: 1.5, py: 0.75 }}
                   onClick={() => handleAddSingle(widget)}
                 >

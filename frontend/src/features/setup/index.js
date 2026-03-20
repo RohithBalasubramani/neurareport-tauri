@@ -1,0 +1,5 @@
+export { default as SetupWizardContainer } from './containers/SetupWizardContainer.jsx'
+export { default as ConnectDBContainer } from './containers/ConnectDBContainer.jsx'
+export { default as TemplatesPaneContainer } from './containers/TemplatesPaneContainer.jsx'
+export { default as UploadTemplateContainer } from './containers/UploadTemplateContainer.jsx'
+export { default as UploadVerifyContainer } from './containers/UploadVerifyContainer.jsx'

@@ -9,91 +9,20 @@
  */
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import {
-  TextField,
   Box,
   Typography,
   Fade,
   useTheme,
-  alpha,
-  InputAdornment,
 } from '@mui/material'
 import {
   CheckCircle as ValidIcon,
   Error as ErrorIcon,
   Info as InfoIcon,
 } from '@mui/icons-material'
+import { ValidationState } from './validationRules'
 
-// Validation states
-export const ValidationState = {
-  IDLE: 'idle',
-  VALIDATING: 'validating',
-  VALID: 'valid',
-  INVALID: 'invalid',
-  WARNING: 'warning',
-}
-
-/**
- * Common validation rules
- */
-export const ValidationRules = {
-  required: (message = 'This field is required') => ({
-    validate: (value) => {
-      const trimmed = typeof value === 'string' ? value.trim() : value
-      return trimmed && trimmed.length > 0
-    },
-    message,
-  }),
-
-  minLength: (min, message) => ({
-    validate: (value) => !value || value.length >= min,
-    message: message || `Must be at least ${min} characters`,
-  }),
-
-  maxLength: (max, message) => ({
-    validate: (value) => !value || value.length <= max,
-    message: message || `Must be ${max} characters or less`,
-  }),
-
-  pattern: (regex, message = 'Invalid format') => ({
-    validate: (value) => !value || regex.test(value),
-    message,
-  }),
-
-  email: (message = 'Please enter a valid email address') => ({
-    validate: (value) => {
-      if (!value) return true
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-      return emailRegex.test(value)
-    },
-    message,
-  }),
-
-  url: (message = 'Please enter a valid URL') => ({
-    validate: (value) => {
-      if (!value) return true
-      try {
-        new URL(value)
-        return true
-      } catch {
-        return false
-      }
-    },
-    message,
-  }),
-
-  noSpecialChars: (message = 'Special characters are not allowed') => ({
-    validate: (value) => {
-      if (!value) return true
-      return /^[a-zA-Z0-9_\-\s]+$/.test(value)
-    },
-    message,
-  }),
-
-  custom: (validateFn, message) => ({
-    validate: validateFn,
-    message,
-  }),
-}
+// Re-export for backward compatibility
+export { ValidationState, ValidationRules } from './validationRules'
 
 /**
  * Hook for field validation
@@ -109,7 +38,6 @@ export function useFieldValidation(rules = [], options = {}) {
   const rulesRef = useRef(rules)
   rulesRef.current = rules
 
-  // Run validation
   const runValidation = useCallback((val) => {
     for (const rule of rulesRef.current) {
       const isValid = rule.validate(val)
@@ -124,23 +52,15 @@ export function useFieldValidation(rules = [], options = {}) {
     return true
   }, [])
 
-  // Handle change with debounce
   const handleChange = useCallback((newValue) => {
     setValue(newValue)
-
     if (!validateOnChange) return
-
-    // Clear existing timer
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current)
     }
-
-    // Set validating state immediately
     if (touched && newValue) {
       setState(ValidationState.VALIDATING)
     }
-
-    // Debounce validation
     debounceTimerRef.current = setTimeout(() => {
       if (touched || newValue) {
         runValidation(newValue)
@@ -148,7 +68,6 @@ export function useFieldValidation(rules = [], options = {}) {
     }, debounceMs)
   }, [validateOnChange, touched, debounceMs, runValidation])
 
-  // Handle blur
   const handleBlur = useCallback(() => {
     setTouched(true)
     if (validateOnBlur) {
@@ -156,13 +75,11 @@ export function useFieldValidation(rules = [], options = {}) {
     }
   }, [validateOnBlur, runValidation, value])
 
-  // Validate on demand
   const validate = useCallback(() => {
     setTouched(true)
     return runValidation(value)
   }, [runValidation, value])
 
-  // Reset
   const reset = useCallback(() => {
     setValue('')
     setTouched(false)
@@ -170,7 +87,6 @@ export function useFieldValidation(rules = [], options = {}) {
     setError(null)
   }, [])
 
-  // Cleanup
   useEffect(() => {
     return () => {
       if (debounceTimerRef.current) {
@@ -200,168 +116,11 @@ export function useFieldValidation(rules = [], options = {}) {
   }
 }
 
-/**
- * Validated TextField Component
- * Drop-in replacement for TextField with built-in validation
- */
-export function ValidatedTextField({
-  rules = [],
-  value,
-  onChange,
-  onBlur,
-  showValidIcon = true,
-  showCharCount = false,
-  maxLength,
-  validateOnMount = false,
-  hint,
-  ...props
-}) {
-  const theme = useTheme()
-  const [localValue, setLocalValue] = useState(value || '')
-  const [touched, setTouched] = useState(validateOnMount)
-  const [validationState, setValidationState] = useState(ValidationState.IDLE)
-  const [errorMessage, setErrorMessage] = useState(null)
-
-  // Sync with external value
-  useEffect(() => {
-    if (value !== undefined) {
-      setLocalValue(value)
-    }
-  }, [value])
-
-  // Auto-add maxLength rule if specified
-  const allRules = useMemo(() => {
-    const r = [...rules]
-    if (maxLength && !r.some((rule) => rule.message?.includes('characters or less'))) {
-      r.push(ValidationRules.maxLength(maxLength))
-    }
-    return r
-  }, [rules, maxLength])
-
-  // Validate
-  const validate = useCallback((val) => {
-    for (const rule of allRules) {
-      if (!rule.validate(val)) {
-        setValidationState(ValidationState.INVALID)
-        setErrorMessage(rule.message)
-        return false
-      }
-    }
-    setValidationState(val ? ValidationState.VALID : ValidationState.IDLE)
-    setErrorMessage(null)
-    return true
-  }, [allRules])
-
-  // Handle change
-  const validateTimerRef = useRef(null)
-
-  useEffect(() => {
-    return () => {
-      if (validateTimerRef.current) {
-        clearTimeout(validateTimerRef.current)
-      }
-    }
-  }, [])
-
-  const handleChange = useCallback((e) => {
-    const newValue = e.target.value
-
-    // Enforce maxLength at input level
-    if (maxLength && newValue.length > maxLength) {
-      return
-    }
-
-    setLocalValue(newValue)
-    onChange?.(e)
-
-    // Validate with slight delay for perceived performance
-    if (touched) {
-      if (validateTimerRef.current) {
-        clearTimeout(validateTimerRef.current)
-      }
-      validateTimerRef.current = setTimeout(() => validate(newValue), 50)
-    }
-  }, [onChange, touched, validate, maxLength])
-
-  // Handle blur
-  const handleBlur = useCallback((e) => {
-    setTouched(true)
-    validate(localValue)
-    onBlur?.(e)
-  }, [onBlur, localValue, validate])
-
-  // Determine helper text
-  const helperText = useMemo(() => {
-    if (touched && errorMessage) {
-      return errorMessage
-    }
-    if (hint && !touched) {
-      return hint
-    }
-    if (showCharCount && maxLength) {
-      return `${localValue.length}/${maxLength}`
-    }
-    return props.helperText
-  }, [touched, errorMessage, hint, showCharCount, maxLength, localValue.length, props.helperText])
-
-  // Determine end adornment
-  const endAdornment = useMemo(() => {
-    if (!showValidIcon || !touched) {
-      return props.InputProps?.endAdornment
-    }
-
-    let icon = null
-    if (validationState === ValidationState.VALID) {
-      icon = <ValidIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
-    } else if (validationState === ValidationState.INVALID) {
-      icon = <ErrorIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
-    }
-
-    if (!icon) {
-      return props.InputProps?.endAdornment
-    }
-
-    return (
-      <InputAdornment position="end">
-        <Fade in>
-          {icon}
-        </Fade>
-        {props.InputProps?.endAdornment}
-      </InputAdornment>
-    )
-  }, [showValidIcon, touched, validationState, props.InputProps?.endAdornment])
-
-  return (
-    <TextField
-      {...props}
-      value={localValue}
-      onChange={handleChange}
-      onBlur={handleBlur}
-      error={touched && validationState === ValidationState.INVALID}
-      helperText={helperText}
-      inputProps={{
-        ...props.inputProps,
-        maxLength: maxLength,
-      }}
-      InputProps={{
-        ...props.InputProps,
-        endAdornment,
-      }}
-      FormHelperTextProps={{
-        ...props.FormHelperTextProps,
-        sx: {
-          ...props.FormHelperTextProps?.sx,
-          display: 'flex',
-          justifyContent: 'space-between',
-        },
-      }}
-    />
-  )
-}
+// Re-export ValidatedTextField for backward compatibility
+export { default as ValidatedTextField } from './ValidatedTextField'
 
 /**
  * Validation Feedback Component
- * Shows validation state with animation
  */
 export function ValidationFeedback({ state, message, successMessage = 'Looks good!' }) {
   const theme = useTheme()

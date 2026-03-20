@@ -4,148 +4,34 @@
  */
 import { forwardRef, useMemo } from 'react'
 import {
-  Box,
   Typography,
   IconButton,
   Tooltip,
   useTheme,
   alpha,
-  styled,
 } from '@mui/material'
 import {
   TrendingUp as TrendUpIcon,
   TrendingDown as TrendDownIcon,
   TrendingFlat as TrendFlatIcon,
   DragIndicator as DragIcon,
-  MoreVert as MoreIcon,
   Delete as DeleteIcon,
 } from '@mui/icons-material'
 import ReactECharts from 'echarts-for-react'
-import { neutral, palette } from '@/app/theme'
+import { neutral } from '@/app/theme'
+import {
+  WidgetContainer,
+  Header,
+  DragHandle,
+  ValueContainer,
+  TrendBadge,
+  SparklineContainer,
+  formatValue,
+  getTrendDirection,
+  calculateChange,
+} from './metricWidgetStyles'
 
-// =============================================================================
-// STYLED COMPONENTS
-// =============================================================================
-
-const WidgetContainer = styled(Box)(({ theme }) => ({
-  height: '100%',
-  display: 'flex',
-  flexDirection: 'column',
-  backgroundColor: theme.palette.background.paper,
-  borderRadius: 8,  // Figma spec: 8px
-  border: `1px solid ${alpha(theme.palette.divider, 0.1)}`,
-  overflow: 'hidden',
-  padding: theme.spacing(2),
-  transition: 'box-shadow 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
-  '&:hover': {
-    boxShadow: `0 4px 20px ${alpha(theme.palette.common.black, 0.08)}`,
-  },
-}))
-
-const Header = styled(Box)(({ theme }) => ({
-  display: 'flex',
-  alignItems: 'center',
-  marginBottom: theme.spacing(1),
-}))
-
-const DragHandle = styled(Box)(({ theme }) => ({
-  display: 'flex',
-  alignItems: 'center',
-  cursor: 'grab',
-  color: alpha(theme.palette.text.secondary, 0.4),
-  marginRight: theme.spacing(1),
-  '&:hover': {
-    color: theme.palette.text.secondary,
-  },
-}))
-
-const ValueContainer = styled(Box)(({ theme }) => ({
-  display: 'flex',
-  alignItems: 'baseline',
-  gap: theme.spacing(1),
-  marginBottom: theme.spacing(0.5),
-}))
-
-const TrendBadge = styled(Box, {
-  shouldForwardProp: (prop) => prop !== 'trend',
-})(({ theme, trend }) => {
-  const colors = {
-    up: theme.palette.text.secondary,
-    down: theme.palette.text.secondary,
-    flat: theme.palette.text.secondary,
-  }
-  const bgColors = {
-    up: theme.palette.mode === 'dark' ? alpha(theme.palette.text.primary, 0.1) : neutral[100],
-    down: theme.palette.mode === 'dark' ? alpha(theme.palette.text.primary, 0.1) : neutral[100],
-    flat: theme.palette.mode === 'dark' ? alpha(theme.palette.text.primary, 0.05) : neutral[50],
-  }
-
-  return {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 2,
-    padding: theme.spacing(0.25, 0.75),
-    borderRadius: 4,
-    fontSize: '0.75rem',
-    fontWeight: 600,
-    color: colors[trend] || colors.flat,
-    backgroundColor: bgColors[trend] || bgColors.flat,
-  }
-})
-
-const SparklineContainer = styled(Box)(({ theme }) => ({
-  flex: 1,
-  minHeight: 40,
-  marginTop: theme.spacing(1),
-}))
-
-// =============================================================================
-// HELPERS
-// =============================================================================
-
-const formatValue = (value, format = 'number') => {
-  if (value === null || value === undefined) return '-'
-
-  switch (format) {
-    case 'currency':
-      return new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: 'USD',
-        notation: value >= 1000000 ? 'compact' : 'standard',
-        maximumFractionDigits: value >= 1000000 ? 1 : 0,
-      }).format(value)
-
-    case 'percent':
-      return `${value.toFixed(1)}%`
-
-    case 'compact':
-      return new Intl.NumberFormat('en-US', {
-        notation: 'compact',
-        maximumFractionDigits: 1,
-      }).format(value)
-
-    case 'decimal':
-      return value.toFixed(2)
-
-    default:
-      return new Intl.NumberFormat('en-US').format(value)
-  }
-}
-
-const getTrendDirection = (current, previous) => {
-  if (!previous || current === previous) return 'flat'
-  return current > previous ? 'up' : 'down'
-}
-
-const calculateChange = (current, previous) => {
-  if (!previous) return null
-  const change = ((current - previous) / previous) * 100
-  return change
-}
-
-// =============================================================================
-// MAIN COMPONENT
-// =============================================================================
+export { METRIC_FORMATS } from './metricWidgetStyles'
 
 const MetricWidget = forwardRef(function MetricWidget({
   id,
@@ -290,14 +176,3 @@ const MetricWidget = forwardRef(function MetricWidget({
 })
 
 export default MetricWidget
-
-/**
- * Predefined metric formats
- */
-export const METRIC_FORMATS = [
-  { value: 'number', label: 'Number' },
-  { value: 'currency', label: 'Currency ($)' },
-  { value: 'percent', label: 'Percentage (%)' },
-  { value: 'compact', label: 'Compact (K, M, B)' },
-  { value: 'decimal', label: 'Decimal (2 places)' },
-]

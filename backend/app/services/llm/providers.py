@@ -260,161 +260,219 @@ class ClaudeCodeCLIProvider(BaseProvider):
 
         return "\n\n".join(parts)
 
+    def _has_images(self, messages: List[Dict[str, Any]]) -> bool:
+        """Check if any message contains image content."""
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") in ("image_url", "image"):
+                        return True
+        return False
+
+    def _call_litellm_direct(
+        self,
+        messages: List[Dict[str, Any]],
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """
+        Direct HTTP call to LiteLLM's Anthropic /v1/messages endpoint.
+
+        Used for vision calls where Claude CLI can't pass images.
+        Qwen 3.5 27B handles images natively through vLLM.
+        """
+        import requests as _requests
+
+        api_base = getattr(self.config, 'api_base', 'http://localhost:4000').rstrip('/')
+        url = f"{api_base}/v1/messages"
+
+        # Convert OpenAI-style image_url blocks to Anthropic-style image blocks
+        anthropic_messages = []
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                parts = []
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text":
+                            parts.append({"type": "text", "text": part.get("text", "")})
+                        elif part.get("type") == "image_url":
+                            image_url = part.get("image_url", {})
+                            url_str = image_url.get("url", "") if isinstance(image_url, dict) else ""
+                            if url_str.startswith("data:"):
+                                # data:image/png;base64,<data>
+                                header, b64_data = url_str.split(",", 1)
+                                media_type = header.split(";")[0].split(":")[1] if ":" in header else "image/png"
+                                parts.append({
+                                    "type": "image",
+                                    "source": {"type": "base64", "media_type": media_type, "data": b64_data}
+                                })
+                        elif part.get("type") == "image":
+                            parts.append(part)  # Already Anthropic format
+                    elif isinstance(part, str):
+                        parts.append({"type": "text", "text": part})
+                anthropic_messages.append({"role": msg.get("role", "user"), "content": parts})
+            else:
+                anthropic_messages.append({"role": msg.get("role", "user"), "content": str(content)})
+
+        payload = {
+            "model": "claude-sonnet-4-6",
+            "max_tokens": kwargs.get("max_tokens", 8192),
+            "messages": anthropic_messages,
+        }
+
+        start_time = time.time()
+        logger.info("litellm_vision_call", extra={
+            "event": "litellm_vision_call",
+            "message_count": len(messages),
+        })
+
+        try:
+            resp = _requests.post(url, json=payload, headers={
+                "x-api-key": getattr(self.config, 'api_key', 'dummy') or "dummy",
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            }, timeout=self.config.timeout_seconds)
+
+            data = resp.json()
+            if "error" in data:
+                raise AppError(
+                    code="llm_call_failed",
+                    message=f"LiteLLM vision call failed: {data['error']}",
+                    status_code=502,
+                )
+
+            content = data.get("content", [{}])[0].get("text", "")
+            elapsed = time.time() - start_time
+            usage = data.get("usage", {})
+
+            logger.info("litellm_vision_success", extra={
+                "event": "litellm_vision_success",
+                "model": data.get("model", "?"),
+                "elapsed_seconds": round(elapsed, 2),
+                "output_length": len(content),
+            })
+
+            return {
+                "id": data.get("id", f"litellm-{int(time.time())}"),
+                "model": data.get("model", "qwen"),
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": "stop",
+                }],
+                "usage": {
+                    "prompt_tokens": usage.get("input_tokens", 0),
+                    "completion_tokens": usage.get("output_tokens", 0),
+                    "total_tokens": usage.get("total_tokens", 0),
+                },
+            }
+
+        except AppError:
+            raise
+        except Exception as e:
+            logger.error("litellm_vision_failed", extra={"error": _sanitize_error(e)})
+            raise AppError(
+                code="llm_call_failed",
+                message="Vision LLM call failed.",
+                status_code=502,
+                detail=_sanitize_error(e),
+            )
+
+    def _call_claude_cli(self, prompt: str) -> Dict[str, Any]:
+        """
+        Text-only call via Claude Code CLI subprocess.
+
+        Claude CLI → ANTHROPIC_BASE_URL (LiteLLM) → vLLM → Qwen 3.5 27B.
+        Used for text-only calls (mapping, contract, chat).
+        """
+        import tempfile
+
+        cmd = [self._claude_bin, "-p", "--bare", "--model", "sonnet"]
+
+        logger.info("claude_code_cli_call", extra={
+            "event": "claude_code_cli_call",
+            "prompt_length": len(prompt),
+        })
+
+        start_time = time.time()
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+                f.write(prompt)
+                prompt_file = f.name
+
+            import os as _env_os
+            env = _env_os.environ.copy()
+            env.pop('CLAUDECODE', None)
+            env['ANTHROPIC_BASE_URL'] = getattr(self.config, 'api_base', 'http://localhost:4000').rstrip('/v1').rstrip('/')
+            env['ANTHROPIC_API_KEY'] = getattr(self.config, 'api_key', 'dummy') or 'dummy'
+
+            with open(prompt_file, 'r', encoding='utf-8') as pf:
+                result = subprocess.run(
+                    cmd, stdin=pf, capture_output=True, text=True,
+                    timeout=self.config.timeout_seconds, env=env,
+                    **_no_window_kwargs(),
+                )
+
+            import os as _os
+            _os.unlink(prompt_file)
+
+            if result.returncode != 0:
+                error_msg = (result.stderr or result.stdout or "").strip()[:500]
+                logger.error("claude_code_cli_error", extra={"error": error_msg, "returncode": result.returncode})
+                raise AppError(code="llm_call_failed", message="Claude CLI returned an error.", status_code=502, detail=error_msg)
+
+            content = result.stdout.strip()
+            elapsed = time.time() - start_time
+
+            logger.info("claude_code_cli_success", extra={
+                "event": "claude_code_cli_success",
+                "elapsed_seconds": round(elapsed, 2),
+                "output_length": len(content),
+            })
+
+            input_tokens = len(prompt) // 4
+            output_tokens = len(content) // 4
+
+            return {
+                "id": f"claude-cli-{int(time.time())}",
+                "model": "qwen",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": input_tokens, "completion_tokens": output_tokens, "total_tokens": input_tokens + output_tokens},
+            }
+
+        except subprocess.TimeoutExpired:
+            raise AppError(code="llm_timeout", message=f"Timed out after {self.config.timeout_seconds}s.", status_code=504)
+        except AppError:
+            raise
+        except Exception as e:
+            logger.error("claude_code_cli_failed", extra={"error": _sanitize_error(e)})
+            raise AppError(code="llm_error", message="AI request failed.", status_code=502, detail=_sanitize_error(e))
+
     def chat_completion(
         self,
         messages: List[Dict[str, Any]],
         model: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Execute a chat completion via Claude Code CLI."""
-        import tempfile
+        """
+        Hybrid provider: Claude CLI for text, direct LiteLLM for vision.
 
-        self.get_client()  # Verify CLI is available
-        model = model or self.config.model or "sonnet"
+        - Messages with images → direct HTTP to LiteLLM /v1/messages
+          (Anthropic format, LiteLLM routes to Qwen 3.5 27B on vLLM)
+        - Text-only messages → Claude CLI subprocess with --bare
+          (ANTHROPIC_BASE_URL redirects to LiteLLM → Qwen 3.5 27B)
 
-        # Extract images from messages and save to temp files
-        image_files = self._extract_images_from_messages(messages)
+        Both paths end at Qwen 3.5 27B. Claude Code CLI stays in the loop
+        for text calls. No Anthropic API is ever hit.
+        """
+        self.get_client()
 
-        # Build the prompt
-        prompt = self._build_prompt(messages)
-
-        # Build CLI command
-        cmd = [self._claude_bin, "-p"]  # -p = print mode (no interactive UI)
-
-        # Add model flag
-        if model in ("opus", "sonnet", "haiku"):
-            cmd.extend(["--model", model])
-
-        # Allow Read tool for image access with auto-accept permissions
-        if image_files:
-            cmd.extend(["--allowedTools", "Read", "--permission-mode", "acceptEdits"])
-
-        # Add image file paths to the prompt as instructions to read them
-        if image_files:
-            image_instructions = "\n\nIMPORTANT: The following image files have been provided. Please read them using the Read tool:\n"
-            for i, img_path in enumerate(image_files, 1):
-                # Convert to forward slashes for consistency
-                normalized_path = img_path.replace("\\", "/")
-                image_instructions += f"- Image {i}: {normalized_path}\n"
-            image_instructions += "\nPlease analyze the image(s) above to complete the requested task.\n"
-            prompt = image_instructions + prompt
-
-        logger.info(
-            "claude_code_cli_call",
-            extra={
-                "event": "claude_code_cli_call",
-                "model": model,
-                "prompt_length": len(prompt),
-                "image_count": len(image_files),
-            }
-        )
-
-        start_time = time.time()
-        try:
-            # Use a temp file for the prompt to handle large inputs
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
-                f.write(prompt)
-                prompt_file = f.name
-
-            # Run claude CLI with prompt from stdin
-            # Explicitly unset CLAUDECODE to avoid conflicts when running nested CLI calls
-            import os as _env_os
-            env = _env_os.environ.copy()
-            env.pop('CLAUDECODE', None)
-
-            with open(prompt_file, 'r', encoding='utf-8') as pf:
-                result = subprocess.run(
-                    cmd,
-                    stdin=pf,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.config.timeout_seconds,
-                    env=env,
-                    **_no_window_kwargs(),
-                )
-
-            # Clean up temp files
-            import os as _os
-            _os.unlink(prompt_file)
-            for img_path in image_files:
-                try:
-                    _os.unlink(img_path)
-                except Exception:
-                    pass
-
-            if result.returncode != 0:
-                stderr_msg = (result.stderr or "").strip()
-                stdout_msg = (result.stdout or "").strip()
-                # Claude CLI often writes errors to stdout, not stderr
-                error_msg = stderr_msg or stdout_msg or f"Claude CLI exited with code {result.returncode}"
-                # Truncate to avoid enormous log entries
-                if len(error_msg) > 500:
-                    error_msg = error_msg[:500] + "..."
-                logger.error(
-                    "claude_code_cli_error",
-                    extra={"event": "claude_code_cli_error", "error": error_msg, "returncode": result.returncode}
-                )
-                raise AppError(
-                    code="llm_call_failed",
-                    message="AI request failed. Claude Code CLI returned an error.",
-                    status_code=502,
-                    detail=error_msg,
-                )
-
-            content = result.stdout.strip()
-            elapsed = time.time() - start_time
-
-            logger.info(
-                "claude_code_cli_success",
-                extra={
-                    "event": "claude_code_cli_success",
-                    "model": model,
-                    "elapsed_seconds": round(elapsed, 2),
-                    "output_length": len(content),
-                }
-            )
-
-            # Estimate tokens (rough approximation)
-            input_tokens = len(prompt) // 4
-            output_tokens = len(content) // 4
-
-            return {
-                "id": f"claude-cli-{int(time.time())}",
-                "model": f"claude-{model}",
-                "choices": [{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": content,
-                    },
-                    "finish_reason": "stop",
-                }],
-                "usage": {
-                    "prompt_tokens": input_tokens,
-                    "completion_tokens": output_tokens,
-                    "total_tokens": input_tokens + output_tokens,
-                }
-            }
-
-        except subprocess.TimeoutExpired:
-            raise AppError(
-                code="llm_timeout",
-                message=f"AI request timed out after {self.config.timeout_seconds}s. Try a simpler query.",
-                status_code=504,
-            )
-        except AppError:
-            raise  # Already structured — don't wrap again
-        except Exception as e:
-            logger.error(
-                "claude_code_cli_failed",
-                extra={"event": "claude_code_cli_failed", "error": _sanitize_error(e)}
-            )
-            raise AppError(
-                code="llm_error",
-                message="AI request failed unexpectedly.",
-                status_code=502,
-                detail=_sanitize_error(e),
-            )
+        if self._has_images(messages):
+            return self._call_litellm_direct(messages, **kwargs)
+        else:
+            prompt = self._build_prompt(messages)
+            return self._call_claude_cli(prompt)
 
     def chat_completion_stream(
         self,

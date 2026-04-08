@@ -76,6 +76,8 @@ def _build_v1_router() -> APIRouter:
     # Core
     v1.include_router(connections.router, prefix="/connections", tags=["connections"])
     v1.include_router(templates.router, prefix="/templates", tags=["templates"])
+    from backend.app.api.routes.templates import pipeline_router
+    v1.include_router(pipeline_router, prefix="/pipeline", tags=["pipeline"])
     v1.include_router(excel.router, prefix="/excel", tags=["excel"])
     v1.include_router(reports.router, prefix="/reports", tags=["reports"])
     v1.include_router(jobs.router, prefix="/jobs", tags=["jobs"])

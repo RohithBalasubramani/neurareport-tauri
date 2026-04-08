@@ -225,17 +225,17 @@ async def run_event_stream_async(
 _LLM_JOB_TYPES = {"verify_template", "verify_excel", "mapping_approve"}
 
 # Per-job-type timeout defaults (seconds).
-# LLM jobs get shorter timeouts; report jobs need more time for rendering.
+# LLM jobs get shorter timeouts; report jobs need more time for large datasets (10M+ rows).
 _JOB_TIMEOUT_MAP = {
     "verify_template": 600,
     "verify_excel": 600,
     "mapping_approve": 600,
-    "run_report": 1800,
+    "run_report": 7200,
 }
-_DEFAULT_JOB_TIMEOUT = int(os.getenv("NR_JOB_TIMEOUT_SECONDS", "1800"))
+_DEFAULT_JOB_TIMEOUT = int(os.getenv("NR_JOB_TIMEOUT_SECONDS", "7200"))
 
 # Event stream wall-clock timeout
-_EVENT_STREAM_TIMEOUT = int(os.getenv("NR_EVENT_STREAM_TIMEOUT", "1800"))
+_EVENT_STREAM_TIMEOUT = int(os.getenv("NR_EVENT_STREAM_TIMEOUT", "7200"))
 
 
 def _run_with_heartbeat(runner: Callable, job_id: str) -> None:

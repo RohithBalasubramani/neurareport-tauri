@@ -10,6 +10,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+import requests
+
 from ..prompts.llm_prompts import LLM_CALL_PROMPTS
 from ..render.html_raster import rasterize_html_to_png, save_png
 from ..utils import call_chat_completion, extract_tokens, normalize_token_braces
@@ -484,6 +486,105 @@ def save_html(path: Path, html: str):
 # LLM client initialised lazily via get_openai_client() (uses Claude Code CLI)
 
 
+def _ocr_with_deepseek(png_path: Path, *, dpi: int = 200) -> str:
+    """Run OCR on a PNG image using DeepSeek-OCR via Ollama's native /api/generate endpoint.
+
+    Uses the native Ollama endpoint (NOT /v1/chat/completions) because
+    DeepSeek-OCR's raw prompt template ({{ .Prompt }}) doesn't work with
+    the OpenAI-compatible endpoint.
+
+    Args:
+        png_path: Path to the PNG image to OCR.
+        dpi: If the original image is too large (e.g. 400 DPI), re-render
+             at this DPI before sending.  Set to 0 to skip re-rendering.
+
+    Returns:
+        Extracted text from the image, or empty string on failure.
+    """
+    from ..llm.config import get_llm_config
+
+    config = get_llm_config()
+    if not config.vision_ocr_enabled:
+        logger.info("deepseek_ocr_disabled", extra={"event": "deepseek_ocr_disabled"})
+        return ""
+
+    ocr_api_base = config.vision_ocr_api_base.rstrip("/")
+    ocr_model = config.vision_ocr_model
+    ocr_url = f"{ocr_api_base}/api/generate"
+
+    try:
+        # Re-render at lower DPI if the source PNG is from a 400 DPI render
+        # (large images cause DeepSeek-OCR to return garbage)
+        img_path = png_path
+        if dpi and dpi < 400 and fitz is not None:
+            # Check if we have the source PDF to re-render at lower DPI
+            source_pdf = png_path.parent / "source.pdf"
+            if source_pdf.exists():
+                ocr_png = png_path.parent / "ocr_reference.png"
+                if not ocr_png.exists():
+                    doc = fitz.open(source_pdf)
+                    zoom = dpi / 72.0
+                    mat = fitz.Matrix(zoom, zoom)
+                    pg = doc[0]
+                    pix = pg.get_pixmap(matrix=mat, alpha=False)
+                    pix.save(ocr_png)
+                    doc.close()
+                    logger.info(
+                        "deepseek_ocr_rerendered",
+                        extra={"event": "deepseek_ocr_rerendered", "dpi": dpi, "path": str(ocr_png)},
+                    )
+                img_path = ocr_png
+
+        img_b64 = base64.b64encode(img_path.read_bytes()).decode("utf-8")
+
+        payload = {
+            "model": ocr_model,
+            "prompt": "OCR the text in this image.",
+            "images": [img_b64],
+            "stream": False,
+        }
+
+        logger.info(
+            "deepseek_ocr_request",
+            extra={
+                "event": "deepseek_ocr_request",
+                "url": ocr_url,
+                "model": ocr_model,
+                "image_size_bytes": len(img_b64),
+            },
+        )
+
+        resp = requests.post(ocr_url, json=payload, timeout=120)
+        resp.raise_for_status()
+        result = resp.json()
+        raw_text = result.get("response", "")
+
+        # Strip **bold markers** that DeepSeek-OCR adds
+        clean_text = raw_text.replace("**", "")
+
+        logger.info(
+            "deepseek_ocr_success",
+            extra={
+                "event": "deepseek_ocr_success",
+                "text_length": len(clean_text),
+                "snippet": clean_text[:200],
+            },
+        )
+        return clean_text.strip()
+
+    except Exception as exc:
+        logger.warning(
+            "deepseek_ocr_failed",
+            extra={
+                "event": "deepseek_ocr_failed",
+                "error": str(exc),
+                "png_path": str(png_path),
+            },
+            exc_info=True,
+        )
+        return ""
+
+
 def request_initial_html(
     page_png: Path,
     schema_json: Optional[dict],
@@ -497,9 +598,18 @@ def request_initial_html(
     prompt = prompt_template.replace("{schema_str}", schema_str)
     hints_json = json.dumps(layout_hints or {}, ensure_ascii=False, separators=(",", ":"))
 
+    # --- DeepSeek-OCR: extract text from the PDF page image ---
+    ocr_text = _ocr_with_deepseek(page_png)
+
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    if ocr_text:
+        content.append(
+            {"type": "text", "text": f"EXTRACTED TEXT FROM PDF (via OCR):\n{ocr_text}"}
+        )
     if hints_json and hints_json != "{}":
         content.append({"type": "text", "text": "HINTS_JSON:\n" + hints_json})
+    # Keep the image_url block — it gets stripped by the provider for
+    # text-only models, but remains available if a vision model is used.
     content.append(
         {
             "type": "image_url",
@@ -576,6 +686,31 @@ def request_fix_html(
     render_png_path = Path(render_png_path)
 
     current_html = html_path.read_text(encoding="utf-8")
+
+    # --- Skip image-comparison refinement for non-vision models ---
+    # The fix step requires the LLM to compare reference vs rendered images.
+    # Non-vision models (e.g. Qwen via Claude Code CLI) cannot do this,
+    # so we accept the initial HTML as-is.
+    from ..llm.config import get_llm_config
+    _cfg = get_llm_config()
+    if not _cfg.supports_vision:
+        logger.info(
+            "request_fix_html_skipped_no_vision",
+            extra={
+                "event": "request_fix_html_skipped_no_vision",
+                "model": _cfg.model,
+            },
+        )
+        metrics: Dict[str, Any] = {"accepted": True, "rejected_reason": "skipped_no_vision_model"}
+        metrics_path = _write_fix_metrics(pdf_dir, metrics)
+        return {
+            "accepted": True,
+            "rejected_reason": None,
+            "render_after_path": None,
+            "render_after_full_path": None,
+            "metrics_path": metrics_path,
+            "raw_response": "",
+        }
 
     schema_text = "{}"
     if schema_path and schema_path.exists():

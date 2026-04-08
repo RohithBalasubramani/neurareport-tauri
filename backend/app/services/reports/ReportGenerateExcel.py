@@ -82,8 +82,8 @@ def _pdf_worker_mp_target(html_path: str, pdf_path: str, base_dir: str, pdf_scal
     ))
 
 
-# Timeout for the PDF worker process (20 minutes — large chunked docs can take a while on slow machines).
-_PDF_PROCESS_TIMEOUT = int(os.environ.get("NEURA_PDF_PROCESS_TIMEOUT", "1200"))
+# Timeout for the PDF worker process (30 minutes — large chunked docs with 10M+ rows).
+_PDF_PROCESS_TIMEOUT = int(os.environ.get("NEURA_PDF_PROCESS_TIMEOUT", "3600"))
 
 
 def _html_to_pdf_subprocess(
@@ -532,24 +532,20 @@ def fill_and_print(
         if not normalized_table or not normalized_column or not normalized_value:
             _canonicalize_cache[cache_key] = canonical
             return canonical
+        # Use a targeted SQL query instead of loading the entire table
         try:
-            frame = dataframe_loader.frame(table)
+            import sqlite3 as _sqlite3
+            quoted_t = table.replace('"', '""')
+            quoted_c = column.replace('"', '""')
+            with _sqlite3.connect(str(dataframe_loader.db_path), timeout=30) as _con:
+                row = _con.execute(
+                    f'SELECT "{quoted_c}" FROM "{quoted_t}" WHERE "{quoted_c}" = ? COLLATE NOCASE LIMIT 1',
+                    (normalized_value,)
+                ).fetchone()
+                if row and row[0] is not None:
+                    canonical = str(row[0])
         except Exception:
-            _canonicalize_cache[cache_key] = canonical
-            return canonical
-        if column not in frame.columns:
-            _canonicalize_cache[cache_key] = canonical
-            return canonical
-        series = frame[column]
-        try:
-            matches = series.dropna().astype(str)
-        except Exception:
-            matches = series.dropna().apply(lambda v: str(v))
-        lower_target = normalized_value.lower()
-        mask = matches.str.lower() == lower_target
-        filtered = matches[mask]
-        if not filtered.empty:
-            canonical = str(filtered.iloc[0])
+            pass
         _canonicalize_cache[cache_key] = canonical
         return canonical
 

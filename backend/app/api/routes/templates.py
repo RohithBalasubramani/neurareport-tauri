@@ -672,3 +672,160 @@ def delete_saved_chart_route(
     """Delete a saved chart."""
     payload = delete_saved_chart_service(template_id, chart_id, _ensure_template_exists)
     return _wrap(payload, _correlation(request))
+
+# ============================================================================
+# Pipeline Router — Unified Chat Pipeline
+# ============================================================================
+from fastapi import APIRouter as _PipelineRouter
+
+pipeline_router = _PipelineRouter()
+
+@pipeline_router.post("/chat")
+async def pipeline_chat(request: Request):
+    """Unified chat endpoint for entire template pipeline."""
+    import json as _json
+    from starlette.responses import StreamingResponse
+    from backend.legacy.schemas.template_schema import TemplateChatMessage
+
+    body = await request.json()
+    messages = [TemplateChatMessage(role=m["role"], content=m["content"]) for m in body.get("messages", [])]
+
+    # Try unified orchestrator
+    try:
+        from backend.app.services.chat import ChatSession, ChatPipelineOrchestrator, classify_intent
+        from pathlib import Path
+
+        template_id = body.get("template_id")
+        connection_id = body.get("connection_id")
+        action = body.get("action")
+        session_id = body.get("session_id")
+
+        # Resolve template dir
+        if template_id:
+            tdir = template_dir(template_id, must_exist=False, create=True)
+        else:
+            import uuid
+            sid = session_id or uuid.uuid4().hex[:12]
+            upload_root = Path(os.getenv("UPLOAD_ROOT", "uploads"))
+            tdir = upload_root / f"_session_{sid}"
+            tdir.mkdir(parents=True, exist_ok=True)
+
+        session = ChatSession.load_or_create(tdir, session_id=session_id, connection_id=connection_id)
+        if connection_id:
+            session.connection_id = connection_id
+
+        last_msg = messages[-1].content if messages else ""
+        intent = classify_intent(message=last_msg, action=action, pipeline_state=session.pipeline_state.value)
+
+        # Build payload-like object
+        class _P:
+            pass
+        payload = _P()
+        payload.template_id = template_id
+        payload.connection_id = connection_id
+        payload.messages = messages
+        payload.html = body.get("html")
+        payload.action = action
+        payload.action_params = body.get("action_params")
+
+        orchestrator = ChatPipelineOrchestrator(session, request)
+
+        async def _stream():
+            async for event in orchestrator.dispatch(intent, payload):
+                event.setdefault("session_id", session.session_id)
+                event.setdefault("template_id", template_id)
+                yield _json.dumps(event, ensure_ascii=False) + "\n"
+
+        return StreamingResponse(_stream(), media_type="application/x-ndjson",
+            headers={"X-Session-Id": session.session_id, "X-Pipeline-State": session.pipeline_state.value})
+
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@pipeline_router.post("/chat/upload")
+async def pipeline_chat_upload(request: Request):
+    """Multipart upload for pipeline."""
+    import json as _json
+    from starlette.responses import StreamingResponse
+    from backend.legacy.schemas.template_schema import TemplateChatMessage
+
+    form = await request.form()
+    upload_file = form.get("file")
+    payload_raw = form.get("payload_json", "{}")
+    if isinstance(payload_raw, bytes):
+        payload_raw = payload_raw.decode("utf-8")
+    payload_data = _json.loads(payload_raw) if isinstance(payload_raw, str) else {}
+
+    try:
+        from backend.app.services.chat import ChatSession, ChatPipelineOrchestrator, classify_intent
+        from pathlib import Path
+
+        template_id = payload_data.get("template_id")
+        connection_id = payload_data.get("connection_id")
+        session_id = payload_data.get("session_id")
+
+        if template_id:
+            tdir = template_dir(template_id, must_exist=False, create=True)
+        else:
+            import uuid
+            sid = session_id or uuid.uuid4().hex[:12]
+            upload_root = Path(os.getenv("UPLOAD_ROOT", "uploads"))
+            tdir = upload_root / f"_session_{sid}"
+            tdir.mkdir(parents=True, exist_ok=True)
+
+        session = ChatSession.load_or_create(tdir, session_id=session_id, connection_id=connection_id)
+
+        class _P:
+            pass
+        payload = _P()
+        payload.template_id = template_id
+        payload.connection_id = connection_id
+        payload.messages = []
+        payload.html = None
+        payload.action = "verify"
+        payload.action_params = None
+
+        orchestrator = ChatPipelineOrchestrator(session, request)
+
+        async def _stream():
+            async for event in orchestrator.dispatch("verify", payload, upload_file=upload_file):
+                event.setdefault("session_id", session.session_id)
+                yield _json.dumps(event, ensure_ascii=False) + "\n"
+
+        return StreamingResponse(_stream(), media_type="application/x-ndjson")
+
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@pipeline_router.get("/{session_id}")
+async def pipeline_session_get(session_id: str):
+    """Read session state for resume."""
+    from backend.app.services.chat.session import ChatSession
+    from pathlib import Path
+    import os
+
+    upload_root = Path(os.getenv("UPLOAD_ROOT", "uploads"))
+    excel_root = Path(os.getenv("EXCEL_UPLOAD_ROOT", "uploads_excel"))
+
+    for base in [upload_root, excel_root]:
+        if not base.exists():
+            continue
+        for tdir in base.iterdir():
+            if not tdir.is_dir():
+                continue
+            sp = tdir / "chat_session.json"
+            if sp.exists():
+                try:
+                    s = ChatSession.load(tdir)
+                    if s.session_id == session_id:
+                        return s.to_dict()
+                except Exception:
+                    continue
+
+    raise HTTPException(status_code=404, detail="Session not found")

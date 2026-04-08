@@ -52,6 +52,10 @@ class LLMConfig:
     provider: LLMProvider = LLMProvider.CLAUDE_CODE
     model: str = "sonnet"
 
+    # LiteLLM proxy (routes to Qwen 3.5 27B on vLLM)
+    api_base: str = "http://localhost:4000"
+    api_key: str = "dummy"
+
     # Request settings
     timeout_seconds: float = 120.0
     max_retries: int = 3
@@ -66,6 +70,11 @@ class LLMConfig:
     supports_vision: bool = True
     supports_function_calling: bool = True
     supports_streaming: bool = True
+
+    # Vision/OCR settings (DeepSeek-OCR via Ollama)
+    vision_ocr_enabled: bool = True
+    vision_ocr_model: str = "deepseek-ocr"
+    vision_ocr_api_base: str = "http://localhost:11434"
 
     # Additional options
     extra_options: Dict[str, Any] = field(default_factory=dict)
@@ -106,6 +115,11 @@ class LLMConfig:
         temperature = os.getenv("LLM_TEMPERATURE")
         max_tokens = os.getenv("LLM_MAX_TOKENS")
 
+        # Vision/OCR settings (DeepSeek-OCR via Ollama)
+        vision_ocr_enabled = os.getenv("VISION_OCR_ENABLED", "true").lower() in ("1", "true", "yes")
+        vision_ocr_model = os.getenv("VISION_OCR_MODEL", "deepseek-ocr")
+        vision_ocr_api_base = os.getenv("VISION_OCR_API_BASE", "http://localhost:11434")
+
         return cls(
             provider=LLMProvider.CLAUDE_CODE,
             model=model,
@@ -115,6 +129,9 @@ class LLMConfig:
             retry_multiplier=retry_multiplier,
             temperature=float(temperature) if temperature else None,
             max_tokens=int(max_tokens) if max_tokens else None,
+            vision_ocr_enabled=vision_ocr_enabled,
+            vision_ocr_model=vision_ocr_model,
+            vision_ocr_api_base=vision_ocr_api_base,
         )
 
     def get_vision_model(self) -> str:

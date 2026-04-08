@@ -553,18 +553,27 @@ def discover_batches_and_counts(
     child_filter_pairs: list[tuple[str, list[str]]] = [
         (col, _normalize_key_value(values)) for col, values in child_filters
     ]
+    # Load tables with SQL-level date pre-filtering when a date column is known.
+    # This avoids loading millions of rows into memory for large tables.
     try:
-        parent_df = loader.frame(parent_table).copy()
+        if parent_date and (start_date or end_date) and hasattr(loader, 'frame_date_filtered'):
+            parent_df = loader.frame_date_filtered(parent_table, parent_date, start_date, end_date).copy()
+        else:
+            parent_df = loader.frame(parent_table).copy()
     except Exception as exc:  # pragma: no cover - surfaced to caller
         raise RuntimeError(f"Failed to load parent table {parent_table!r}: {exc}") from exc
 
     child_df = None
     if has_child:
         try:
-            child_df = loader.frame(child_table).copy()
+            if child_date and (start_date or end_date) and hasattr(loader, 'frame_date_filtered'):
+                child_df = loader.frame_date_filtered(child_table, child_date, start_date, end_date).copy()
+            else:
+                child_df = loader.frame(child_table).copy()
         except Exception as exc:  # pragma: no cover - surfaced to caller
             raise RuntimeError(f"Failed to load child table {child_table!r}: {exc}") from exc
 
+    # Apply DataFrame-level date filter as a safety net (handles timezone stripping, snap, etc.)
     parent_df = _apply_date_filter(parent_df, parent_date, start_date, end_date)
     parent_df = _apply_value_filters(parent_df, parent_filter_pairs)
 

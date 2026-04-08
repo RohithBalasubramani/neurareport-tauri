@@ -85,23 +85,26 @@ class Settings(BaseSettings):
     allowed_hosts_all: bool = Field(default=False, validation_alias="NEURA_ALLOWED_HOSTS_ALL")  # Set to True only for local development
 
     # Request timeout
-    request_timeout_seconds: int = Field(default=300, validation_alias="NEURA_REQUEST_TIMEOUT_SECONDS")
+    # Request timeout — sync report runs may take a while with large datasets
+    request_timeout_seconds: int = Field(default=1800, validation_alias="NEURA_REQUEST_TIMEOUT_SECONDS")
 
     # DataFrame store memory limits
-    dataframe_max_memory_mb: int = Field(default=2048, validation_alias="NEURA_DF_MAX_MEMORY_MB")
-    dataframe_row_limit: int = Field(default=500_000, validation_alias="NEURA_DF_ROW_LIMIT")
+    dataframe_max_memory_mb: int = Field(default=8192, validation_alias="NEURA_DF_MAX_MEMORY_MB")
+    # Row limit 0 = unlimited. SQL date-pre-filtering already limits rows loaded,
+    # so a global cap is no longer needed. Set via env to re-enable if needed.
+    dataframe_row_limit: int = Field(default=0, validation_alias="NEURA_DF_ROW_LIMIT")
 
     # LLM call resilience
     llm_max_attempts: int = Field(default=3, validation_alias="NEURA_LLM_MAX_ATTEMPTS")
     llm_retry_min_wait: float = Field(default=2.0, validation_alias="NEURA_LLM_MIN_WAIT")
     llm_retry_max_wait: float = Field(default=30.0, validation_alias="NEURA_LLM_MAX_WAIT")
 
-    # PDF render timeout (milliseconds)
-    pdf_render_timeout_ms: int = Field(default=120_000, validation_alias="NEURA_PDF_RENDER_TIMEOUT_MS")
+    # PDF render timeout (milliseconds) — 5 minutes per page/chunk
+    pdf_render_timeout_ms: int = Field(default=600_000, validation_alias="NEURA_PDF_RENDER_TIMEOUT_MS")
 
-    # Job timeouts (seconds)
-    job_default_timeout_seconds: int = Field(default=1800, validation_alias="NR_JOB_TIMEOUT_SECONDS")
-    event_stream_timeout_seconds: int = Field(default=1800, validation_alias="NR_EVENT_STREAM_TIMEOUT")
+    # Job timeouts (seconds) — 1 hour for large reports (10M+ rows)
+    job_default_timeout_seconds: int = Field(default=7200, validation_alias="NR_JOB_TIMEOUT_SECONDS")
+    event_stream_timeout_seconds: int = Field(default=7200, validation_alias="NR_EVENT_STREAM_TIMEOUT")
 
     # Idempotency configuration
     idempotency_enabled: bool = Field(default=True, validation_alias="NEURA_IDEMPOTENCY_ENABLED")

@@ -932,14 +932,21 @@ class ContractAdapter:
         if not source_table:
             return pd.DataFrame()
 
+        # Pre-filter at SQL level when date column is known to avoid loading
+        # millions of rows into memory (e.g. 2.7M temperature rows).
+        date_col = self._date_columns.get(source_table.lower()) or self._date_columns.get(source_table)
         try:
-            df = loader.frame(source_table).copy()
-            logger.info("resolve_row_data: loaded %d rows from %s", len(df), source_table)
+            if date_col and (start_date or end_date) and hasattr(loader, 'frame_date_filtered'):
+                df = loader.frame_date_filtered(source_table, date_col, start_date, end_date).copy()
+                logger.info("resolve_row_data: loaded %d rows from %s (SQL date-filtered)", len(df), source_table)
+            else:
+                df = loader.frame(source_table).copy()
+                logger.info("resolve_row_data: loaded %d rows from %s (full)", len(df), source_table)
         except Exception:
             logger.exception("resolve_row_data: failed to load table %r", source_table)
             return pd.DataFrame()
 
-        # Apply date filter using DataFrame-level coercion (handles all formats)
+        # Apply DataFrame-level date filter as safety net (handles timezone stripping, snap, etc.)
         df = self._apply_date_filter_df(df, source_table, start_date, end_date)
         logger.info("resolve_row_data: %d rows after date filter (start=%s end=%s)", len(df), start_date, end_date)
 

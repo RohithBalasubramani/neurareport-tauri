@@ -185,7 +185,7 @@ async def import_template_zip(file: UploadFile, request: Request, name: str | No
     return normalized
 
 
-def verify_template(file: UploadFile, connection_id: str | None, request: Request, refine_iters: int = 0):
+def verify_template(file: UploadFile, connection_id: str | None, request: Request, refine_iters: int = 0, page: int = 0):
     return verify_template_service(
         file=file,
         connection_id=connection_id,

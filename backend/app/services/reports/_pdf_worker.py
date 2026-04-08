@@ -26,9 +26,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Configurable timeout for Playwright page operations (default: 2 minutes).
-# Prevents indefinite hangs when HTML references broken external resources.
-_PDF_RENDER_TIMEOUT_MS = int(os.environ.get("NEURA_PDF_RENDER_TIMEOUT_MS", "120000"))
+# Configurable timeout for Playwright page operations (default: 5 minutes).
+# Large reports (10M+ rows) generate huge HTML that takes time to render.
+_PDF_RENDER_TIMEOUT_MS = int(os.environ.get("NEURA_PDF_RENDER_TIMEOUT_MS", "600000"))
 
 # Maximum number of <tr> rows before we switch to chunked PDF generation.
 _CHUNK_THRESHOLD = int(os.environ.get("NEURA_PDF_CHUNK_THRESHOLD", "8000"))

@@ -75,8 +75,8 @@ def _pdf_worker_mp_target(html_path: str, pdf_path: str, base_dir: str, pdf_scal
     ))
 
 
-# Timeout for the PDF worker process (10 minutes — large chunked docs can take a while).
-_PDF_PROCESS_TIMEOUT = int(os.environ.get("NEURA_PDF_PROCESS_TIMEOUT", "600"))
+# Timeout for the PDF worker process (30 minutes — large chunked docs with 10M+ rows).
+_PDF_PROCESS_TIMEOUT = int(os.environ.get("NEURA_PDF_PROCESS_TIMEOUT", "3600"))
 
 
 def _html_to_pdf_subprocess(
@@ -328,7 +328,11 @@ def fill_and_print(
                 continue
             if _tbl not in _columns_cache:
                 try:
-                    _columns_cache[_tbl] = set(dataframe_loader.frame(_tbl).columns)
+                    # Use PRAGMA to get column names without loading data
+                    if hasattr(dataframe_loader, 'column_names'):
+                        _columns_cache[_tbl] = set(dataframe_loader.column_names(_tbl))
+                    else:
+                        _columns_cache[_tbl] = set(dataframe_loader.frame(_tbl).columns)
                 except Exception:
                     _columns_cache[_tbl] = set()
             if _col not in _columns_cache[_tbl] and not _col.startswith("__"):
@@ -565,7 +569,7 @@ def fill_and_print(
             try:
                 context = await browser.new_context(base_url=base_url)
                 page = await context.new_page()
-                _pdf_timeout_ms = int(os.environ.get("NEURA_PDF_RENDER_TIMEOUT_MS", "120000"))
+                _pdf_timeout_ms = int(os.environ.get("NEURA_PDF_RENDER_TIMEOUT_MS", "600000"))
                 page.set_default_timeout(_pdf_timeout_ms)
                 await page.set_content(html_source, wait_until="load", timeout=_pdf_timeout_ms)
                 await page.emulate_media(media="print")

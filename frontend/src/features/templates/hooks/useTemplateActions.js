@@ -56,6 +56,8 @@ export default function useTemplateActions({ templates, removeTemplate, setTempl
       type: InteractionType.DELETE,
       label: `Delete design "${templateToDelete.name || templateToDelete.id}"`,
       reversibility: Reversibility.PARTIALLY_REVERSIBLE,
+      suppressSuccessToast: true,
+      blocksNavigation: false,
       action: async () => {
         removeTemplate(templateToDelete.id)
 

@@ -54,6 +54,8 @@ export default function useTemplateBulkActions({ templates, setTemplates, fetchT
       type: InteractionType.DELETE,
       label: `Delete ${count} design${count !== 1 ? 's' : ''}`,
       reversibility: Reversibility.PARTIALLY_REVERSIBLE,
+      suppressSuccessToast: true,
+      blocksNavigation: false,
       errorMessage: 'Failed to remove designs',
       action: async () => {
         setTemplates((prev) => prev.filter((tpl) => !idsToDelete.includes(tpl.id)))

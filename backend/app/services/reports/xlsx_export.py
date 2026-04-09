@@ -113,6 +113,13 @@ def _parse_html_to_rows(html_text: str):
         if not rows:
             rows = [["Report output unavailable"]]
 
+    # Pad all rows to the same width so preface/header rows span the full
+    # sheet width in Excel (prevents narrow preface rows when data has many columns).
+    max_cols = max((len(r) for r in rows if r), default=1)
+    for i, row in enumerate(rows):
+        if row and len(row) < max_cols:
+            rows[i] = row + [""] * (max_cols - len(row))
+
     return rows, data_row_positions, preface_ranges, data_header_row_idx
 
 

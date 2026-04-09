@@ -1561,8 +1561,10 @@ def fill_and_print(
 
         if rows_data:
             tbody_m, tbody_inner = best_rows_tbody(block_html, allowed_row_tokens)
+            _log_debug("[render] rows_data:", len(rows_data), "tbody_found:", tbody_m is not None)
             if tbody_m and tbody_inner:
                 row_template, row_span, row_tokens_in_template = find_row_template(tbody_inner, allowed_row_tokens)
+                _log_debug("[render] row_template_found:", row_template is not None)
                 if row_template and row_tokens_in_template:
                     row_columns_template = [
                         _extract_col_name(PLACEHOLDER_TO_COL.get(tok)) or "" for tok in row_tokens_in_template
@@ -1574,7 +1576,9 @@ def fill_and_print(
                         render_columns,
                         treat_all_as_data=bool(__force_single),
                     )
+                    _log_debug("[render] after filter:", len(filtered_rows))
                     filtered_rows = _prune_placeholder_rows(filtered_rows, row_tokens_in_template)
+                    _log_debug("[render] after prune:", len(filtered_rows))
                     if __force_single:
                         _log_debug(
                             f"[multi-debug] generator rows: total={len(rows_data)}, filtered={len(filtered_rows)}, key_values={KEY_VALUES}"

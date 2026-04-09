@@ -71,7 +71,7 @@ function clearLoadingTimer() {
  * Uses Tauri IPC to check backend health (bypasses browser CORS/CSP).
  * Falls back to HTTP fetch for non-Tauri or if IPC is unavailable.
  */
-async function waitForBackend(baseUrl, maxWaitMs = 120000) {
+async function waitForBackend(baseUrl, maxWaitMs = 300000) {
   const start = Date.now()
   const interval = 1000
 
@@ -109,7 +109,7 @@ async function waitForBackend(baseUrl, maxWaitMs = 120000) {
     }
     await new Promise((r) => setTimeout(r, interval))
   }
-  throw new Error('Backend did not start within 120 seconds')
+  throw new Error('Backend did not start within 5 minutes')
 }
 
 // In Tauri desktop mode, discover the backend port, wait for it, then render.

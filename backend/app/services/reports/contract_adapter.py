@@ -963,6 +963,9 @@ class ContractAdapter:
             df = self._apply_group_aggregate_df(df)
 
         # Apply reshape rules if present
+        # Store db_path for auto-discover in HOURLY_PIVOT
+        self._db_path = getattr(loader, 'db_path', None)
+
         melt_alias_set: set[str] = set()
         if self._reshape_rules:
             df = self._apply_reshape_df(df, loader, source_table)
@@ -1353,6 +1356,64 @@ class ContractAdapter:
         hour_start = int(rule.get("hour_start", 6))
         include_stats = rule.get("include_stats", False)
         divisor = float(rule.get("divisor", 1))
+        auto_discover = rule.get("auto_discover", False)
+
+        # Auto-discover sensors from neuract__device_mappings table if enabled
+        if (auto_discover or not sensors) and self._parent_table:
+            try:
+                import sqlite3 as _sq
+                # Find the loader's db_path
+                db_path = getattr(self, '_db_path', None)
+                if db_path is None and hasattr(self, '_loader_ref') and self._loader_ref:
+                    db_path = getattr(self._loader_ref, 'db_path', None)
+                if db_path:
+                    with _sq.connect(str(db_path), timeout=30) as _con:
+                        _rows = _con.execute(
+                            "SELECT field_key FROM neuract__device_mappings WHERE table_name = ? ORDER BY field_key",
+                            (self._parent_table,)
+                        ).fetchall()
+                        if _rows:
+                            # Also fetch the OPC address for description
+                            _detail_rows = _con.execute(
+                                "SELECT field_key, address FROM neuract__device_mappings WHERE table_name = ? ORDER BY field_key",
+                                (self._parent_table,)
+                            ).fetchall()
+                            _addr_map = {r[0]: r[1] for r in _detail_rows}
+
+                            discovered = []
+                            for r in _rows:
+                                col = r[0]
+                                # Skip _TOTAL columns (totalizer/accumulator duplicates)
+                                if col.endswith("_TOTAL"):
+                                    continue
+                                # Format tag: AI_10_RO1_ORP → AI-10_RO1 ORP
+                                # Pattern: split by _, first part is prefix (AI/RO1/etc),
+                                # second part is number, rest is name
+                                parts = col.split("_")
+                                if len(parts) >= 3 and parts[1].isdigit():
+                                    tag = f"{parts[0]}-{parts[1]}_{' '.join(parts[2:])}"
+                                else:
+                                    tag = col.replace("_", " ")
+                                # Description from OPC address path
+                                addr = _addr_map.get(col, "")
+                                desc = ""
+                                if addr:
+                                    # Extract meaningful part: ns=4;s=Address Space.Dev00.AI.AI10 → AI.AI10
+                                    addr_parts = addr.split(".")
+                                    if len(addr_parts) >= 2:
+                                        desc = ".".join(addr_parts[-2:])
+                                discovered.append({"col": col, "tag": tag, "desc": desc})
+
+                            # Merge: keep existing sensor configs, add any missing
+                            existing_cols = {s["col"] for s in sensors}
+                            for d in discovered:
+                                if d["col"] not in existing_cols and d["col"] != ts_col:
+                                    sensors.append(d)
+                            if not sensors:
+                                sensors = [s for s in discovered if s["col"] != ts_col]
+                            logger.info("hourly_pivot: auto-discovered %d sensors from device_mappings for %s (filtered _TOTAL)", len(discovered), self._parent_table)
+            except Exception as exc:
+                logger.debug("hourly_pivot: auto-discover failed: %s", exc)
 
         if ts_col not in df.columns or not sensors:
             logger.warning("hourly_pivot: missing timestamp_col=%s or empty sensors", ts_col)

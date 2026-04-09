@@ -1291,7 +1291,52 @@ class ContractAdapter:
                 #   divisor: 100  (divide raw values)
                 df = self._apply_hourly_pivot(df, rule)
 
+            elif strategy == "RUN_HOURS_DIFF":
+                # Group by description, compute (last - first) total_seconds,
+                # format as H:MM:SS. Produces one row per machine.
+                # Config: group_col, seconds_col, timestamp_col
+                df = self._apply_run_hours_diff(df, rule)
+
         return df
+
+    def _apply_run_hours_diff(self, df: "pd.DataFrame", rule: dict) -> "pd.DataFrame":
+        """Compute running hours diff (last - first) per machine group."""
+        import pandas as pd
+        from .discovery_excel import _coerce_datetime_series
+
+        group_col = rule.get("group_col", "description")
+        seconds_col = rule.get("seconds_col", "total_seconds")
+        ts_col = rule.get("timestamp_col", "timestamp_utc")
+
+        if group_col not in df.columns or seconds_col not in df.columns:
+            logger.warning("run_hours_diff: missing columns %s/%s", group_col, seconds_col)
+            return df
+
+        # Sort by group + timestamp
+        ts = _coerce_datetime_series(df[ts_col])
+        df = df.copy()
+        df["__ts_naive__"] = ts
+        df = df.sort_values(["__ts_naive__"], ascending=True)
+
+        rows = []
+        sr = 0
+        for desc, group in df.groupby(group_col, sort=True):
+            sr += 1
+            secs = pd.to_numeric(group[seconds_col], errors="coerce")
+            first_s = secs.iloc[0] if not secs.empty else 0
+            last_s = secs.iloc[-1] if not secs.empty else 0
+            diff = abs(int(last_s - first_s))
+            h, rem = divmod(diff, 3600)
+            m, s = divmod(rem, 60)
+            rows.append({
+                "row_sr_no": str(sr),
+                "row_description": str(desc),
+                "row_running_hours": f"{h}h {m}m {s}s",
+            })
+
+        result = pd.DataFrame(rows)
+        logger.info("run_hours_diff: %d groups → %d rows", len(rows), len(result))
+        return result
 
     def _apply_hourly_pivot(self, df: "pd.DataFrame", rule: dict) -> "pd.DataFrame":
         """Transpose time-series: sensors → rows, hours → columns.

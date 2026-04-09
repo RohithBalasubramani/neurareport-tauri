@@ -52,43 +52,37 @@ export default function useTemplateActions({ templates, removeTemplate, setTempl
     setDeleteConfirmOpen(false)
     setDeletingTemplate(null)
 
-    execute({
-      type: InteractionType.DELETE,
-      label: `Delete design "${templateToDelete.name || templateToDelete.id}"`,
-      reversibility: Reversibility.PARTIALLY_REVERSIBLE,
-      suppressSuccessToast: true,
-      blocksNavigation: false,
-      action: async () => {
-        removeTemplate(templateToDelete.id)
+    // Optimistic removal — bypass execute() governance wrapper to avoid
+    // re-render conflicts between governance state and template list state.
+    removeTemplate(templateToDelete.id)
 
-        let undone = false
-        const deleteTimeout = setTimeout(async () => {
-          if (undone) return
-          try {
-            await api.deleteTemplate(templateToDelete.id)
-          } catch (err) {
-            if (templateData) {
-              setTemplates((prev) => [...prev, templateData])
-            }
-            throw err
-          }
-        }, 5000)
+    let undone = false
+    const deleteTimeout = setTimeout(async () => {
+      if (undone) return
+      try {
+        await api.deleteTemplate(templateToDelete.id)
+        await fetchTemplatesData()
+      } catch (err) {
+        toast.show('Failed to remove design', 'error')
+        if (templateData) {
+          setTemplates((prev) => [...prev, templateData])
+        }
+      }
+    }, 5000)
 
-        toast.showWithUndo(
-          `"${templateToDelete.name || templateToDelete.id}" removed`,
-          () => {
-            undone = true
-            clearTimeout(deleteTimeout)
-            if (templateData) {
-              setTemplates((prev) => [...prev, templateData])
-            }
-            toast.show('Design restored', 'success')
-          },
-          { severity: 'info' }
-        )
+    toast.showWithUndo(
+      `"${templateToDelete.name || templateToDelete.id}" removed`,
+      () => {
+        undone = true
+        clearTimeout(deleteTimeout)
+        if (templateData) {
+          setTemplates((prev) => [...prev, templateData])
+        }
+        toast.show('Design restored', 'success')
       },
-    })
-  }, [deletingTemplate, templates, removeTemplate, setTemplates, toast, execute])
+      { severity: 'info' }
+    )
+  }, [deletingTemplate, templates, removeTemplate, setTemplates, toast, fetchTemplatesData])
 
   const handleExport = useCallback(async () => {
     if (!menuTemplate) return

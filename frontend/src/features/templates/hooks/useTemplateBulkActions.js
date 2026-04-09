@@ -50,65 +50,57 @@ export default function useTemplateBulkActions({ templates, setTemplates, fetchT
       bulkDeleteUndoRef.current = null
     }
 
-    execute({
-      type: InteractionType.DELETE,
-      label: `Delete ${count} design${count !== 1 ? 's' : ''}`,
-      reversibility: Reversibility.PARTIALLY_REVERSIBLE,
-      suppressSuccessToast: true,
-      blocksNavigation: false,
-      errorMessage: 'Failed to remove designs',
-      action: async () => {
-        setTemplates((prev) => prev.filter((tpl) => !idsToDelete.includes(tpl.id)))
+    // Optimistic removal — bypass execute() governance wrapper to avoid
+    // re-render conflicts between governance state and template list state.
+    setTemplates((prev) => prev.filter((tpl) => !idsToDelete.includes(tpl.id)))
 
-        let undone = false
-        const timeoutId = setTimeout(async () => {
-          if (undone) return
-          setBulkActionLoading(true)
-          try {
-            const result = await api.bulkDeleteTemplates(idsToDelete)
-            const deletedCount = result?.deletedCount ?? result?.deleted?.length ?? 0
-            const failedCount = result?.failedCount ?? result?.failed?.length ?? 0
-            if (failedCount > 0) {
-              toast.show(
-                `Removed ${deletedCount} design${deletedCount !== 1 ? 's' : ''}, ${failedCount} failed`,
-                'warning'
-              )
-            } else {
-              toast.show(`Removed ${deletedCount} design${deletedCount !== 1 ? 's' : ''}`, 'success')
-            }
-            await fetchTemplatesData()
-          } catch (err) {
-            setTemplates((prev) => {
-              const existing = new Set(prev.map((tpl) => tpl.id))
-              const restored = removedTemplates.filter((tpl) => !existing.has(tpl.id))
-              return restored.length ? [...prev, ...restored] : prev
-            })
-            throw err
-          } finally {
-            setBulkActionLoading(false)
-          }
-        }, 5000)
+    let undone = false
+    const timeoutId = setTimeout(async () => {
+      if (undone) return
+      setBulkActionLoading(true)
+      try {
+        const result = await api.bulkDeleteTemplates(idsToDelete)
+        const deletedCount = result?.deletedCount ?? result?.deleted?.length ?? 0
+        const failedCount = result?.failedCount ?? result?.failed?.length ?? 0
+        if (failedCount > 0) {
+          toast.show(
+            `Removed ${deletedCount} design${deletedCount !== 1 ? 's' : ''}, ${failedCount} failed`,
+            'warning'
+          )
+        } else {
+          toast.show(`Removed ${deletedCount} design${deletedCount !== 1 ? 's' : ''}`, 'success')
+        }
+        await fetchTemplatesData()
+      } catch (err) {
+        toast.show('Failed to remove designs', 'error')
+        setTemplates((prev) => {
+          const existing = new Set(prev.map((tpl) => tpl.id))
+          const restored = removedTemplates.filter((tpl) => !existing.has(tpl.id))
+          return restored.length ? [...prev, ...restored] : prev
+        })
+      } finally {
+        setBulkActionLoading(false)
+      }
+    }, 5000)
 
-        bulkDeleteUndoRef.current = { timeoutId, ids: idsToDelete, templates: removedTemplates }
+    bulkDeleteUndoRef.current = { timeoutId, ids: idsToDelete, templates: removedTemplates }
 
-        toast.showWithUndo(
-          `Removed ${count} design${count !== 1 ? 's' : ''}`,
-          () => {
-            undone = true
-            clearTimeout(timeoutId)
-            bulkDeleteUndoRef.current = null
-            setTemplates((prev) => {
-              const existing = new Set(prev.map((tpl) => tpl.id))
-              const restored = removedTemplates.filter((tpl) => !existing.has(tpl.id))
-              return restored.length ? [...prev, ...restored] : prev
-            })
-            toast.show('Designs restored', 'success')
-          },
-          { severity: 'info' }
-        )
+    toast.showWithUndo(
+      `Removed ${count} design${count !== 1 ? 's' : ''}`,
+      () => {
+        undone = true
+        clearTimeout(timeoutId)
+        bulkDeleteUndoRef.current = null
+        setTemplates((prev) => {
+          const existing = new Set(prev.map((tpl) => tpl.id))
+          const restored = removedTemplates.filter((tpl) => !existing.has(tpl.id))
+          return restored.length ? [...prev, ...restored] : prev
+        })
+        toast.show('Designs restored', 'success')
       },
-    })
-  }, [selectedIds, templates, toast, fetchTemplatesData, execute, setTemplates])
+      { severity: 'info' }
+    )
+  }, [selectedIds, templates, toast, fetchTemplatesData, setTemplates])
 
   const handleBulkStatusApply = useCallback(async () => {
     if (!selectedIds.length) {

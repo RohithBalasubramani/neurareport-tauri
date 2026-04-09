@@ -145,7 +145,7 @@ def _html_file_to_xlsx_xlsxwriter(html_path: Path, output_path: Path) -> Optiona
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    wb = _xlsxwriter.Workbook(str(output_path), {"constant_memory": True})
+    wb = _xlsxwriter.Workbook(str(output_path), {"constant_memory": False})
     ws = wb.add_worksheet("Report")
 
     # Pre-define format objects (xlsxwriter requires this)
@@ -174,7 +174,7 @@ def _html_file_to_xlsx_xlsxwriter(html_path: Path, output_path: Path) -> Optiona
         "bg_color": "#D9E1F2",
         "text_wrap": True,
         "valign": "vcenter",
-        "align": "left",
+        "align": "center",
     })
     fmt_data_header = wb.add_format({
         "bold": True,
@@ -222,11 +222,17 @@ def _html_file_to_xlsx_xlsxwriter(html_path: Path, output_path: Path) -> Optiona
         else:
             row_fmt = fmt_border
 
-        # Note: constant_memory mode doesn't support merge_cells, so preface
-        # rows are written to column 0 only (still styled correctly).
+        # For preface title/subtitle rows with only 1 non-empty cell,
+        # merge across all data columns so the text spans the full width.
+        non_empty = [i for i, v in enumerate(row) if v and str(v).strip()]
+        if (is_title or (is_preface and len(non_empty) == 1)) and data_max_cols > 1:
+            val = row[non_empty[0]] if non_empty else ""
+            ws.merge_range(r_idx - 1, 0, r_idx - 1, data_max_cols - 1, val, row_fmt)
+        else:
+            for c_idx, value in enumerate(row):
+                ws.write(r_idx - 1, c_idx, value, row_fmt)
+        # Track width
         for c_idx, value in enumerate(row):
-            ws.write(r_idx - 1, c_idx, value, row_fmt)
-            # Track width
             text_len = len(str(value)) if value else 0
             old = col_widths.get(c_idx, 0)
             if text_len > old:

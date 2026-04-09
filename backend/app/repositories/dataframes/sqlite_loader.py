@@ -41,7 +41,7 @@ class SQLiteDataFrameLoader:
             with sqlite3.connect(str(self.db_path), timeout=300) as con:
                 cur = con.execute(
                     "SELECT name FROM sqlite_master "
-                    "WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;"
+                    "WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name;"
                 )
                 tables = [str(row[0]) for row in cur.fetchall() if row and row[0]]
             self._table_names = tables
@@ -83,9 +83,15 @@ class SQLiteDataFrameLoader:
         limit_clause = f" LIMIT {int(self.row_limit)}" if self.row_limit else ""
         try:
             with sqlite3.connect(str(self.db_path), timeout=300) as con:
-                df = pd.read_sql_query(
-                    f'SELECT rowid AS "__rowid__", * FROM "{quoted}"{limit_clause}', con
-                )
+                # Try with rowid first (tables), fall back to without (views)
+                try:
+                    df = pd.read_sql_query(
+                        f'SELECT rowid AS "__rowid__", * FROM "{quoted}"{limit_clause}', con
+                    )
+                except Exception:
+                    df = pd.read_sql_query(
+                        f'SELECT * FROM "{quoted}"{limit_clause}', con
+                    )
         except Exception as exc:  # pragma: no cover - surfaced to caller
             raise RuntimeError(f"Failed loading table {table_name!r} into DataFrame: {exc}") from exc
         if self.row_limit and len(df) >= self.row_limit:
@@ -146,11 +152,15 @@ class SQLiteDataFrameLoader:
             params.append(ed)
 
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f'SELECT rowid AS "__rowid__", * FROM "{quoted_table}"{where}'
 
         try:
             with sqlite3.connect(str(self.db_path), timeout=300) as con:
-                df = pd.read_sql_query(sql, con, params=params)
+                try:
+                    sql = f'SELECT rowid AS "__rowid__", * FROM "{quoted_table}"{where}'
+                    df = pd.read_sql_query(sql, con, params=params)
+                except Exception:
+                    sql = f'SELECT * FROM "{quoted_table}"{where}'
+                    df = pd.read_sql_query(sql, con, params=params)
         except Exception as exc:
             raise RuntimeError(
                 f"Failed loading table {table_name!r} with date filter: {exc}"

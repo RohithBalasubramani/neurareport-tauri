@@ -1476,13 +1476,19 @@ class ContractAdapter:
                 else:
                     row.update({"row_max": "", "row_max_datetime": "", "row_min": "", "row_min_datetime": "", "row_avg": ""})
 
-            # Hourly averages
+            # Hourly values: single reading closest to the top of each hour
             for offset in range(24):
                 h = (hour_start + offset) % 24
                 mask = df["__hour__"] == h
-                vals = raw[mask].dropna()
+                subset = df.loc[mask].copy()
                 col_key = f"row_h{offset}"
-                row[col_key] = f"{vals.mean():.2f}" if not vals.empty else ""
+                if subset.empty:
+                    row[col_key] = ""
+                else:
+                    target = subset["__ts__"].iloc[0].replace(minute=0, second=0, microsecond=0)
+                    closest_idx = (subset["__ts__"] - target).abs().idxmin()
+                    val = raw.loc[closest_idx]
+                    row[col_key] = f"{val:.2f}" if pd.notna(val) else ""
 
             # Totalizer columns (if _TOTAL column exists for this sensor)
             if include_totalizer:
@@ -1495,21 +1501,27 @@ class ContractAdapter:
                     first_total = total_sorted.dropna().iloc[0] if not total_sorted.dropna().empty else None
                     last_total = total_sorted.dropna().iloc[-1] if not total_sorted.dropna().empty else None
 
-                    # Shift A: _TOTAL at 2PM (hour 14) minus _TOTAL at 6AM (hour 6)
-                    def _total_at_hour(h):
-                        m = sorted_df["__hour__"] == h
-                        v = total_sorted[m].dropna()
-                        return v.iloc[-1] if not v.empty else None
+                    # Shift A/B/C: compute totalizer diff for readings WITHIN each shift window
+                    # Shift A = 6AM–2PM, Shift B = 2PM–10PM, Shift C = 10PM–6AM(next)
+                    hours_sorted = sorted_df["__hour__"]
 
-                    t_6am = _total_at_hour(6)
-                    t_2pm = _total_at_hour(14)
-                    t_10pm = _total_at_hour(22)
-                    # For 6AM next day, use the last reading at hour 5 or 6
-                    t_6am_next = _total_at_hour(5) or _total_at_hour(6)
+                    def _shift_diff(h_start, h_end, wrap=False):
+                        if wrap:
+                            mask = (hours_sorted >= h_start) | (hours_sorted < h_end)
+                        else:
+                            mask = (hours_sorted >= h_start) & (hours_sorted < h_end)
+                        v = total_sorted[mask].dropna()
+                        if len(v) >= 2:
+                            return v.iloc[-1] - v.iloc[0]
+                        return None
 
-                    row["row_shift_a"] = f"{(t_2pm - t_6am):.2f}" if t_2pm is not None and t_6am is not None else ""
-                    row["row_shift_b"] = f"{(t_10pm - t_2pm):.2f}" if t_10pm is not None and t_2pm is not None else ""
-                    row["row_shift_c"] = f"{(t_6am_next - t_10pm):.2f}" if t_6am_next is not None and t_10pm is not None else ""
+                    shift_a = _shift_diff(6, 14)
+                    shift_b = _shift_diff(14, 22)
+                    shift_c = _shift_diff(22, 6, wrap=True)
+
+                    row["row_shift_a"] = f"{shift_a:.2f}" if shift_a is not None else ""
+                    row["row_shift_b"] = f"{shift_b:.2f}" if shift_b is not None else ""
+                    row["row_shift_c"] = f"{shift_c:.2f}" if shift_c is not None else ""
                     row["row_today_totalizer"] = f"{(last_total - first_total):.2f}" if last_total is not None and first_total is not None else ""
                     row["row_total_totalizer"] = f"{last_total:.2f}" if last_total is not None else ""
                 else:

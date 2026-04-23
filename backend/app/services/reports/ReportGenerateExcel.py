@@ -1539,115 +1539,211 @@ def fill_and_print(
     # ---- Render all batches ----
     rendered_blocks = []
     generator_header_replacements: dict[str, str] | None = None
+    _use_per_batch = False
     if generator_results is not None:
-        block_html = prototype_block
-
         header_rows = generator_results.get("header") or []
         header_row = header_rows[0] if header_rows else {}
-        header_token_values: dict[str, str] = {}
-        for t in HEADER_TOKENS:
-            if t in header_row:
-                value = header_row[t]
-                formatted_value = format_token_value(t, value)
-                block_html = sub_token(block_html, t, formatted_value)
-                header_token_values[t] = formatted_value
-        if header_token_values:
-            generator_header_replacements = header_token_values
+
+        # Detect batch-level tokens in the FULL html (not just prototype_block)
+        # because batch tokens like {batch_date} may be in the header section
+        _all_html_tokens = set(re.findall(r"\{(\w+)\}", html))
+        _known_tokens = set(ROW_TOKENS) | set(TOTALS.keys()) | set(HEADER_TOKENS) | set(LITERALS.keys())
+        _batch_level_tokens = _all_html_tokens - _known_tokens
+
+        _df_batches = generator_results.get("batches") or []
+        _use_per_batch = bool(_df_batches) and bool(_batch_level_tokens)
+
+        if _use_per_batch:
+            _log_debug(f"[excel] per_batch rendering: {len(_df_batches)} batches, tokens={_batch_level_tokens}")
 
         allowed_row_tokens = {t for t in PLACEHOLDER_TO_COL.keys() if t not in TOTALS} - set(HEADER_TOKENS)
-        rows_data = generator_results.get("rows") or []
-        filtered_rows: list[dict[str, Any]] = []
-        row_tokens_in_template: list[str] = []
 
-        if rows_data:
-            tbody_m, tbody_inner = best_rows_tbody(block_html, allowed_row_tokens)
-            _log_debug("[render] rows_data:", len(rows_data), "tbody_found:", tbody_m is not None)
-            if tbody_m and tbody_inner:
-                row_template, row_span, row_tokens_in_template = find_row_template(tbody_inner, allowed_row_tokens)
-                _log_debug("[render] row_template_found:", row_template is not None)
-                if row_template and row_tokens_in_template:
-                    row_columns_template = [
-                        _extract_col_name(PLACEHOLDER_TO_COL.get(tok)) or "" for tok in row_tokens_in_template
-                    ]
-                    render_columns = list(row_tokens_in_template)
-                    filtered_rows = _filter_rows_for_render(
-                        rows_data,
-                        row_tokens_in_template,
-                        render_columns,
-                        treat_all_as_data=bool(__force_single),
-                    )
-                    _log_debug("[render] after filter:", len(filtered_rows))
-                    filtered_rows = _prune_placeholder_rows(filtered_rows, row_tokens_in_template)
-                    _log_debug("[render] after prune:", len(filtered_rows))
-                    if __force_single:
-                        _log_debug(
-                            f"[multi-debug] generator rows: total={len(rows_data)}, filtered={len(filtered_rows)}, key_values={KEY_VALUES}"
+        # Full template for per-batch rendering (includes header section)
+        _full_template = shell_prefix.replace(BEGIN_TAG, "") + prototype_block + shell_suffix.replace(END_TAG, "")
+
+        def _render_excel_block(block_rows_data, block_header=None):
+            """Render one block from DF pipeline data. Returns (html, had_rows)."""
+            blk = _full_template if _use_per_batch else prototype_block
+
+            # Fill header tokens
+            for t in HEADER_TOKENS:
+                if t in header_row:
+                    blk = sub_token(blk, t, format_token_value(t, header_row[t]))
+
+            # Fill batch-level tokens
+            if block_header and _batch_level_tokens:
+                for m in re.finditer(r"\{(\w+)\}", blk):
+                    tok = m.group(1)
+                    if tok in _known_tokens:
+                        continue
+                    if tok in block_header:
+                        blk = sub_token(blk, tok, format_token_value(tok, block_header[tok]))
+
+            # Fill literals
+            for t, s in LITERALS.items():
+                blk = sub_token(blk, t, s)
+
+            filtered = []
+            rtt = []
+            if block_rows_data:
+                tbody_m, tbody_inner = best_rows_tbody(blk, allowed_row_tokens)
+                if tbody_m and tbody_inner:
+                    row_template, row_span, rtt = find_row_template(tbody_inner, allowed_row_tokens)
+                    if row_template and rtt:
+                        render_columns = list(rtt)
+                        filtered = _filter_rows_for_render(
+                            block_rows_data, rtt, render_columns,
+                            treat_all_as_data=bool(__force_single),
                         )
-                    if filtered_rows:
-                        parts: list[str] = []
-                        for row in filtered_rows:
-                            tr = row_template
-                            for tok in row_tokens_in_template:
-                                val = _value_for_token(row, tok)
-                                tr = sub_token(tr, tok, format_token_value(tok, val))
-                            parts.append(tr)
-                        new_tbody_inner = tbody_inner[: row_span[0]] + "\n".join(parts) + tbody_inner[row_span[1] :]
-                        block_html = block_html[: tbody_m.start(1)] + new_tbody_inner + block_html[tbody_m.end(1) :]
-            else:
-                tr_tokens = [
-                    m.group(1) or m.group(2)
-                    for m in re.finditer(r"\{\{\s*([^}\n]+?)\s*\}\}|\{\s*([^}\n]+?)\s*\}", block_html)
-                ]
-                row_tokens_in_template = [t.strip() for t in tr_tokens if t and t.strip() in allowed_row_tokens]
-                if row_tokens_in_template:
-                    row_columns_template = [
-                        _extract_col_name(PLACEHOLDER_TO_COL.get(tok)) or "" for tok in row_tokens_in_template
-                    ]
-                    render_columns = list(row_tokens_in_template)
-                    filtered_rows = _filter_rows_for_render(
-                        rows_data,
-                        row_tokens_in_template,
-                        render_columns,
-                        treat_all_as_data=bool(__force_single),
-                    )
-                    filtered_rows = _prune_placeholder_rows(filtered_rows, row_tokens_in_template)
-                    if __force_single:
-                        _log_debug(
-                            f"[multi-debug] generator rows (no tbody): total={len(rows_data)}, filtered={len(filtered_rows)}, key_values={KEY_VALUES}"
-                        )
-                    if filtered_rows:
-                        parts = []
-                        for row in filtered_rows:
-                            tr = prototype_block
-                            for tok in row_tokens_in_template:
-                                val = _value_for_token(row, tok)
-                                tr = sub_token(tr, tok, format_token_value(tok, val))
-                            parts.append(tr)
-                        block_html = "\n".join(parts)
+                        filtered = _prune_placeholder_rows(filtered, rtt)
+                        if filtered:
+                            parts = []
+                            for row in filtered:
+                                tr = row_template
+                                for tok in rtt:
+                                    val = _value_for_token(row, tok)
+                                    tr = sub_token(tr, tok, format_token_value(tok, val))
+                                parts.append(tr)
+                            new_inner = tbody_inner[:row_span[0]] + "\n".join(parts) + tbody_inner[row_span[1]:]
+                            blk = blk[:tbody_m.start(1)] + new_inner + blk[tbody_m.end(1):]
 
-        if filtered_rows:
-            totals_row = (generator_results.get("totals") or [{}])[0]
-            for token in TOTALS:
-                value = totals_row.get(token)
-                formatted = format_token_value(token, value)
-                block_html = sub_token(block_html, token, formatted)
-                last_totals_per_token[token] = formatted
-                target = total_token_to_target.get(token)
-                if target:
-                    fv, _formatted = _coerce_total_value(value)
-                    if fv is not None:
-                        totals_accum[target] = totals_accum.get(target, 0.0) + fv
+            # Blank remaining unknown tokens
+            for m in list(re.finditer(r"\{(\w+)\}", blk)):
+                tok = m.group(1)
+                if tok not in _known_tokens and tok not in set(rtt):
+                    blk = sub_token(blk, tok, "")
 
-            rendered_blocks.append(block_html)
+            return blk, bool(filtered)
+
+        if _use_per_batch:
+            # Per-batch rendering: each batch gets its own full template block
+            header_token_values = {}
+            for t in HEADER_TOKENS:
+                if t in header_row:
+                    header_token_values[t] = format_token_value(t, header_row[t])
+            if header_token_values:
+                generator_header_replacements = header_token_values
+
+            for batch_data in _df_batches:
+                blk_html, had_rows = _render_excel_block(
+                    batch_data.get("rows", []),
+                    block_header=batch_data.get("header"),
+                )
+                if had_rows:
+                    rendered_blocks.append(blk_html)
+
+            _log_debug(f"[excel] per_batch: rendered {len(rendered_blocks)} blocks")
         else:
-            _log_debug("Generator SQL produced no usable row data after filtering; skipping block.")
+            # Single-block rendering (original path)
+            block_html = prototype_block
+
+            header_token_values = {}
+            for t in HEADER_TOKENS:
+                if t in header_row:
+                    value = header_row[t]
+                    formatted_value = format_token_value(t, value)
+                    block_html = sub_token(block_html, t, formatted_value)
+                    header_token_values[t] = formatted_value
+            if header_token_values:
+                generator_header_replacements = header_token_values
+
+            rows_data = generator_results.get("rows") or []
+            filtered_rows: list[dict[str, Any]] = []
+            row_tokens_in_template: list[str] = []
+
+            if rows_data:
+                tbody_m, tbody_inner = best_rows_tbody(block_html, allowed_row_tokens)
+                _log_debug("[render] rows_data:", len(rows_data), "tbody_found:", tbody_m is not None)
+                if tbody_m and tbody_inner:
+                    row_template, row_span, row_tokens_in_template = find_row_template(tbody_inner, allowed_row_tokens)
+                    _log_debug("[render] row_template_found:", row_template is not None)
+                    if row_template and row_tokens_in_template:
+                        row_columns_template = [
+                            _extract_col_name(PLACEHOLDER_TO_COL.get(tok)) or "" for tok in row_tokens_in_template
+                        ]
+                        render_columns = list(row_tokens_in_template)
+                        filtered_rows = _filter_rows_for_render(
+                            rows_data,
+                            row_tokens_in_template,
+                            render_columns,
+                            treat_all_as_data=bool(__force_single),
+                        )
+                        _log_debug("[render] after filter:", len(filtered_rows))
+                        filtered_rows = _prune_placeholder_rows(filtered_rows, row_tokens_in_template)
+                        _log_debug("[render] after prune:", len(filtered_rows))
+                        if __force_single:
+                            _log_debug(
+                                f"[multi-debug] generator rows: total={len(rows_data)}, filtered={len(filtered_rows)}, key_values={KEY_VALUES}"
+                            )
+                        if filtered_rows:
+                            parts: list[str] = []
+                            for row in filtered_rows:
+                                tr = row_template
+                                for tok in row_tokens_in_template:
+                                    val = _value_for_token(row, tok)
+                                    tr = sub_token(tr, tok, format_token_value(tok, val))
+                                parts.append(tr)
+                            new_tbody_inner = tbody_inner[: row_span[0]] + "\n".join(parts) + tbody_inner[row_span[1] :]
+                            block_html = block_html[: tbody_m.start(1)] + new_tbody_inner + block_html[tbody_m.end(1) :]
+                else:
+                    tr_tokens = [
+                        m.group(1) or m.group(2)
+                        for m in re.finditer(r"\{\{\s*([^}\n]+?)\s*\}\}|\{\s*([^}\n]+?)\s*\}", block_html)
+                    ]
+                    row_tokens_in_template = [t.strip() for t in tr_tokens if t and t.strip() in allowed_row_tokens]
+                    if row_tokens_in_template:
+                        row_columns_template = [
+                            _extract_col_name(PLACEHOLDER_TO_COL.get(tok)) or "" for tok in row_tokens_in_template
+                        ]
+                        render_columns = list(row_tokens_in_template)
+                        filtered_rows = _filter_rows_for_render(
+                            rows_data,
+                            row_tokens_in_template,
+                            render_columns,
+                            treat_all_as_data=bool(__force_single),
+                        )
+                        filtered_rows = _prune_placeholder_rows(filtered_rows, row_tokens_in_template)
+                        if __force_single:
+                            _log_debug(
+                                f"[multi-debug] generator rows (no tbody): total={len(rows_data)}, filtered={len(filtered_rows)}, key_values={KEY_VALUES}"
+                            )
+                        if filtered_rows:
+                            parts = []
+                            for row in filtered_rows:
+                                tr = prototype_block
+                                for tok in row_tokens_in_template:
+                                    val = _value_for_token(row, tok)
+                                    tr = sub_token(tr, tok, format_token_value(tok, val))
+                                parts.append(tr)
+                            block_html = "\n".join(parts)
+
+            if filtered_rows:
+                totals_row = (generator_results.get("totals") or [{}])[0]
+                for token in TOTALS:
+                    value = totals_row.get(token)
+                    formatted = format_token_value(token, value)
+                    block_html = sub_token(block_html, token, formatted)
+                    last_totals_per_token[token] = formatted
+                    target = total_token_to_target.get(token)
+                    if target:
+                        fv, _formatted = _coerce_total_value(value)
+                        if fv is not None:
+                            totals_accum[target] = totals_accum.get(target, 0.0) + fv
+
+                rendered_blocks.append(block_html)
+            else:
+                _log_debug("Generator SQL produced no usable row data after filtering; skipping block.")
 
     # ---- Assemble full document ----
     rows_rendered = bool(rendered_blocks)
     if not rows_rendered:
         _log_debug("No rendered blocks generated for this selection.")
 
-    html_multi = shell_prefix + "\n".join(rendered_blocks) + shell_suffix
+    if _use_per_batch and rendered_blocks:
+        # Per-batch blocks already include full HTML structure
+        html_multi = "\n".join(rendered_blocks)
+    else:
+        html_multi = shell_prefix + "\n".join(rendered_blocks) + shell_suffix
 
     # Substitute totals into the assembled document (tfoot may be in shell_suffix)
     for token, formatted in last_totals_per_token.items():

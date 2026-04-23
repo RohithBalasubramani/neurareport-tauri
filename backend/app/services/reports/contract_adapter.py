@@ -1063,20 +1063,25 @@ class ContractAdapter:
             result_df = pd.DataFrame({k: [v] for k, v in result_cols.items()})
 
         # Carry forward __batch_idx__ and metadata columns for BLOCK_REPEAT grouping
-        if melt_alias_set and "__batch_idx__" in df.columns:
+        if "__batch_idx__" in df.columns:
             result_df["__batch_idx__"] = df["__batch_idx__"].values
-            # Collect the set of all melted source columns
-            _all_melted_src: set[str] = set()
-            for rule in self._reshape_rules:
-                for cs in rule.get("columns", []):
-                    for f in cs.get("from", []):
-                        if f != "INDEX" and "." in f:
-                            _all_melted_src.add(f.split(".", 1)[1])
+            # Carry forward __cf_* columns (batch-level data like date labels)
             for col in df.columns:
-                if col.startswith("__") or col in _all_melted_src:
-                    continue
-                if col not in result_df.columns and col not in melt_alias_set:
-                    result_df[f"__cf_{col}"] = df[col].values
+                if col.startswith("__cf_") and col not in result_df.columns:
+                    result_df[col] = df[col].values
+            if melt_alias_set:
+                # Collect the set of all melted source columns
+                _all_melted_src: set[str] = set()
+                for rule in self._reshape_rules:
+                    for cs in rule.get("columns", []):
+                        for f in cs.get("from", []):
+                            if f != "INDEX" and "." in f:
+                                _all_melted_src.add(f.split(".", 1)[1])
+                for col in df.columns:
+                    if col.startswith("__") or col in _all_melted_src:
+                        continue
+                    if col not in result_df.columns and col not in melt_alias_set:
+                        result_df[f"__cf_{col}"] = df[col].values
 
         # Apply ordering
         order_cols = self._row_order or self._order_by_rows
@@ -1321,24 +1326,50 @@ class ContractAdapter:
         df["__ts_naive__"] = ts
         df = df.sort_values(["__ts_naive__"], ascending=True)
 
+        # Split into logical days (6AM to 6AM)
+        hour_start = int(rule.get("hour_start", 6))
+        df["__day__"] = (ts - pd.Timedelta(hours=hour_start)).dt.date
+        day_groups = sorted(df["__day__"].unique())
+        num_days = len(day_groups)
+        logger.info("run_hours_diff: %d logical day(s) in data", num_days)
+
         rows = []
-        sr = 0
-        for desc, group in df.groupby(group_col, sort=True):
-            sr += 1
-            secs = pd.to_numeric(group[seconds_col], errors="coerce")
-            first_s = secs.iloc[0] if not secs.empty else 0
-            last_s = secs.iloc[-1] if not secs.empty else 0
-            diff = abs(int(last_s - first_s))
-            h, rem = divmod(diff, 3600)
-            m, s = divmod(rem, 60)
-            rows.append({
-                "row_sr_no": str(sr),
-                "row_description": str(desc),
-                "row_running_hours": f"{h}h {m}m {s}s",
-            })
+        for day_idx, day_val in enumerate(day_groups):
+            day_df = df[df["__day__"] == day_val]
+
+            # Skip days with no meaningful data
+            secs_check = pd.to_numeric(day_df[seconds_col], errors="coerce")
+            if day_df.empty or secs_check.dropna().empty:
+                logger.info("run_hours_diff: skipping day %s — no data", day_val)
+                continue
+
+            day_start = pd.Timestamp(day_val) + pd.Timedelta(hours=hour_start)
+            day_end = day_start + pd.Timedelta(hours=24)
+            day_label = day_start.strftime("%d/%m/%Y")
+
+            sr = 0
+            for desc, group in day_df.groupby(group_col, sort=True):
+                sr += 1
+                secs = pd.to_numeric(group[seconds_col], errors="coerce")
+                first_s = secs.iloc[0] if not secs.empty else 0
+                last_s = secs.iloc[-1] if not secs.empty else 0
+                diff = abs(int(last_s - first_s))
+                h, rem = divmod(diff, 3600)
+                m, s = divmod(rem, 60)
+                row = {
+                    "row_sr_no": str(sr),
+                    "row_description": str(desc),
+                    "row_running_hours": f"{h}h {m}m {s}s",
+                }
+                if num_days > 1:
+                    row["__batch_idx__"] = day_idx
+                    row["__cf_batch_date"] = day_label
+                    row["__cf_from_datetime"] = day_start.strftime("%d/%m/%Y %H:%M")
+                    row["__cf_to_datetime"] = day_end.strftime("%d/%m/%Y %H:%M")
+                rows.append(row)
 
         result = pd.DataFrame(rows)
-        logger.info("run_hours_diff: %d groups → %d rows", len(rows), len(result))
+        logger.info("run_hours_diff: %d groups × %d days → %d rows", sr, num_days, len(result))
         return result
 
     def _apply_hourly_pivot(self, df: "pd.DataFrame", rule: dict) -> "pd.DataFrame":
@@ -1356,6 +1387,7 @@ class ContractAdapter:
         hour_start = int(rule.get("hour_start", 6))
         include_stats = rule.get("include_stats", False)
         include_totalizer = rule.get("include_totalizer", False)
+        totalizer_divisor = float(rule.get("totalizer_divisor", 1))
         divisor = float(rule.get("divisor", 1))
         auto_discover = rule.get("auto_discover", False)
 
@@ -1439,101 +1471,172 @@ class ContractAdapter:
             else:
                 hour_labels.append(f"{h - 12}PM")
 
-        # Build output: one row per sensor
-        out_rows = []
-        for idx, sensor in enumerate(sensors):
-            col = sensor.get("col", "")
-            tag = sensor.get("tag", col)
-            desc = sensor.get("desc", "")
-            label = sensor.get("label", "")
+        # Load separate totalizer table if configured (e.g. neuract__TOTAL)
+        _totalizer_df = None
+        totalizer_table = rule.get("totalizer_table", "")
+        if include_totalizer and totalizer_table:
+            db_path = getattr(self, '_db_path', None)
+            if db_path:
+                try:
+                    import sqlite3 as _sq
+                    with _sq.connect(str(db_path), timeout=30) as _con:
+                        min_ts = df[ts_col].min()
+                        max_ts = df[ts_col].max()
+                        _totalizer_df = pd.read_sql_query(
+                            f'SELECT * FROM "{totalizer_table}" WHERE timestamp_utc >= ? AND timestamp_utc <= ?',
+                            _con, params=(str(min_ts), str(max_ts))
+                        )
+                    if not _totalizer_df.empty:
+                        _t_ts = _coerce_datetime_series(_totalizer_df["timestamp_utc"])
+                        _totalizer_df = _totalizer_df.copy()
+                        _totalizer_df["__ts__"] = _t_ts
+                        _totalizer_df["__hour__"] = _t_ts.dt.hour
+                        _totalizer_df = _totalizer_df.sort_values("__ts__")
+                        logger.info("hourly_pivot: loaded %d rows from totalizer_table %s", len(_totalizer_df), totalizer_table)
+                    else:
+                        _totalizer_df = None
+                except Exception as exc:
+                    logger.warning("hourly_pivot: failed to load totalizer_table %s: %s", totalizer_table, exc)
 
-            if col not in df.columns:
-                logger.warning("hourly_pivot: sensor column %s not found", col)
+        # Split data into logical days (hour_start to hour_start, e.g. 6AM→6AM)
+        # Shift timestamps so that hour_start becomes midnight for grouping
+        df["__day__"] = (ts - pd.Timedelta(hours=hour_start)).dt.date
+
+        day_groups = sorted(df["__day__"].unique())
+        num_days = len(day_groups)
+        logger.info("hourly_pivot: %d logical day(s) in data", num_days)
+
+        # Also split totalizer df by day if present
+        if _totalizer_df is not None:
+            _totalizer_df["__day__"] = (_totalizer_df["__ts__"] - pd.Timedelta(hours=hour_start)).dt.date
+
+        # Build output: for each day, produce all sensor rows
+        out_rows = []
+        for day_idx, day_val in enumerate(day_groups):
+            day_df = df[df["__day__"] == day_val]
+            day_total_df = _totalizer_df[_totalizer_df["__day__"] == day_val] if _totalizer_df is not None else None
+
+            # Skip days with no meaningful sensor data
+            day_has_data = False
+            for sensor in sensors:
+                scol = sensor.get("col", "")
+                if scol in day_df.columns and pd.to_numeric(day_df[scol], errors="coerce").notna().any():
+                    day_has_data = True
+                    break
+            if not day_has_data:
+                logger.info("hourly_pivot: skipping day %s — no sensor data", day_val)
                 continue
 
-            raw = pd.to_numeric(df[col], errors="coerce")
-            if divisor != 1:
-                raw = raw / divisor
+            # Format the day label and boundaries
+            day_start = pd.Timestamp(day_val) + pd.Timedelta(hours=hour_start)
+            day_end = day_start + pd.Timedelta(hours=24)
+            day_label = day_start.strftime("%d/%m/%Y")
 
-            row = {
-                "row_sr_no": str(idx + 1),
-                "row_tag_name": tag,
-                "row_description": desc,
-                "row_label": label,
-            }
+            for idx, sensor in enumerate(sensors):
+                col = sensor.get("col", "")
+                tag = sensor.get("tag", col)
+                desc = sensor.get("desc", "")
+                label = sensor.get("label", "")
 
-            # Stats (if requested — for LT/PT format)
-            if include_stats:
-                valid = raw.dropna()
-                if not valid.empty:
-                    max_idx = valid.idxmax()
-                    min_idx = valid.idxmin()
-                    row["row_max"] = f"{valid.max():.2f}"
-                    row["row_max_datetime"] = str(df.at[max_idx, ts_col])[:19] if pd.notna(max_idx) else ""
-                    row["row_min"] = f"{valid.min():.2f}"
-                    row["row_min_datetime"] = str(df.at[min_idx, ts_col])[:19] if pd.notna(min_idx) else ""
-                    row["row_avg"] = f"{valid.mean():.2f}"
-                else:
-                    row.update({"row_max": "", "row_max_datetime": "", "row_min": "", "row_min_datetime": "", "row_avg": ""})
+                if col not in day_df.columns:
+                    logger.warning("hourly_pivot: sensor column %s not found", col)
+                    continue
 
-            # Hourly values: single reading closest to the top of each hour
-            for offset in range(24):
-                h = (hour_start + offset) % 24
-                mask = df["__hour__"] == h
-                subset = df.loc[mask].copy()
-                col_key = f"row_h{offset}"
-                if subset.empty:
-                    row[col_key] = ""
-                else:
-                    target = subset["__ts__"].iloc[0].replace(minute=0, second=0, microsecond=0)
-                    closest_idx = (subset["__ts__"] - target).abs().idxmin()
-                    val = raw.loc[closest_idx]
-                    row[col_key] = f"{val:.2f}" if pd.notna(val) else ""
+                raw = pd.to_numeric(day_df[col], errors="coerce")
+                if divisor != 1:
+                    raw = raw / divisor
 
-            # Totalizer columns (if _TOTAL column exists for this sensor)
-            if include_totalizer:
-                total_col = col + "_TOTAL"
-                if total_col in df.columns:
-                    total_raw = pd.to_numeric(df[total_col], errors="coerce")
-                    sorted_df = df.sort_values("__ts__")
-                    total_sorted = total_raw.reindex(sorted_df.index)
+                row = {
+                    "row_sr_no": str(idx + 1),
+                    "row_tag_name": tag,
+                    "row_description": desc,
+                    "row_label": label,
+                }
 
-                    first_total = total_sorted.dropna().iloc[0] if not total_sorted.dropna().empty else None
-                    last_total = total_sorted.dropna().iloc[-1] if not total_sorted.dropna().empty else None
+                # Stats (if requested — for LT/PT format)
+                if include_stats:
+                    valid = raw.dropna()
+                    if not valid.empty:
+                        max_idx = valid.idxmax()
+                        min_idx = valid.idxmin()
+                        row["row_max"] = f"{valid.max():.2f}"
+                        row["row_max_datetime"] = str(day_df.at[max_idx, ts_col])[:19] if pd.notna(max_idx) else ""
+                        row["row_min"] = f"{valid.min():.2f}"
+                        row["row_min_datetime"] = str(day_df.at[min_idx, ts_col])[:19] if pd.notna(min_idx) else ""
+                        row["row_avg"] = f"{valid.mean():.2f}"
+                    else:
+                        row.update({"row_max": "", "row_max_datetime": "", "row_min": "", "row_min_datetime": "", "row_avg": ""})
 
-                    # Shift A/B/C: compute totalizer diff for readings WITHIN each shift window
-                    # Shift A = 6AM–2PM, Shift B = 2PM–10PM, Shift C = 10PM–6AM(next)
-                    hours_sorted = sorted_df["__hour__"]
+                # Hourly values: single reading closest to the top of each hour
+                for offset in range(24):
+                    h = (hour_start + offset) % 24
+                    mask = day_df["__hour__"] == h
+                    subset = day_df.loc[mask].copy()
+                    col_key = f"row_h{offset}"
+                    if subset.empty:
+                        row[col_key] = ""
+                    else:
+                        target = subset["__ts__"].iloc[0].replace(minute=0, second=0, microsecond=0)
+                        closest_idx = (subset["__ts__"] - target).abs().idxmin()
+                        val = raw.loc[closest_idx]
+                        row[col_key] = f"{val:.2f}" if pd.notna(val) else ""
 
-                    def _shift_diff(h_start, h_end, wrap=False):
-                        if wrap:
-                            mask = (hours_sorted >= h_start) | (hours_sorted < h_end)
-                        else:
-                            mask = (hours_sorted >= h_start) & (hours_sorted < h_end)
-                        v = total_sorted[mask].dropna()
-                        if len(v) >= 2:
-                            return v.iloc[-1] - v.iloc[0]
-                        return None
+                # Totalizer columns (if _TOTAL column exists in main df or separate totalizer_table)
+                if include_totalizer:
+                    total_col = col + "_TOTAL"
+                    total_raw = None
+                    sorted_df = day_df.sort_values("__ts__")
 
-                    shift_a = _shift_diff(6, 14)
-                    shift_b = _shift_diff(14, 22)
-                    shift_c = _shift_diff(22, 6, wrap=True)
+                    if total_col in day_df.columns:
+                        total_raw = pd.to_numeric(day_df[total_col], errors="coerce").reindex(sorted_df.index)
+                    elif day_total_df is not None and total_col in day_total_df.columns:
+                        total_raw = pd.to_numeric(day_total_df[total_col], errors="coerce").reindex(day_total_df.index)
+                        sorted_df = day_total_df
 
-                    row["row_shift_a"] = f"{shift_a:.2f}" if shift_a is not None else ""
-                    row["row_shift_b"] = f"{shift_b:.2f}" if shift_b is not None else ""
-                    row["row_shift_c"] = f"{shift_c:.2f}" if shift_c is not None else ""
-                    row["row_today_totalizer"] = f"{(last_total - first_total):.2f}" if last_total is not None and first_total is not None else ""
-                    row["row_total_totalizer"] = f"{last_total:.2f}" if last_total is not None else ""
-                else:
-                    row.update({"row_shift_a": "", "row_shift_b": "", "row_shift_c": "", "row_today_totalizer": "", "row_total_totalizer": ""})
+                    if total_raw is not None:
+                        total_sorted = total_raw
+                        first_total = total_sorted.dropna().iloc[0] if not total_sorted.dropna().empty else None
+                        last_total = total_sorted.dropna().iloc[-1] if not total_sorted.dropna().empty else None
 
-            out_rows.append(row)
+                        hours_sorted = sorted_df["__hour__"]
+
+                        def _shift_diff(h_start, h_end, wrap=False):
+                            if wrap:
+                                mask = (hours_sorted >= h_start) | (hours_sorted < h_end)
+                            else:
+                                mask = (hours_sorted >= h_start) & (hours_sorted < h_end)
+                            v = total_sorted[mask].dropna()
+                            if len(v) >= 2:
+                                return v.iloc[-1] - v.iloc[0]
+                            return None
+
+                        shift_a = _shift_diff(6, 14)
+                        shift_b = _shift_diff(14, 22)
+                        shift_c = _shift_diff(22, 6, wrap=True)
+
+                        _td = totalizer_divisor
+                        row["row_shift_a"] = f"{shift_a / _td:.2f}" if shift_a is not None else ""
+                        row["row_shift_b"] = f"{shift_b / _td:.2f}" if shift_b is not None else ""
+                        row["row_shift_c"] = f"{shift_c / _td:.2f}" if shift_c is not None else ""
+                        row["row_today_totalizer"] = f"{(last_total - first_total) / _td:.2f}" if last_total is not None and first_total is not None else ""
+                        row["row_total_totalizer"] = f"{last_total / _td:.2f}" if last_total is not None else ""
+                    else:
+                        row.update({"row_shift_a": "", "row_shift_b": "", "row_shift_c": "", "row_today_totalizer": "", "row_total_totalizer": ""})
+
+                # Tag row with batch index and date for multi-day rendering
+                if num_days > 1:
+                    row["__batch_idx__"] = day_idx
+                    row["__cf_batch_date"] = day_label
+                    row["__cf_from_datetime"] = day_start.strftime("%d/%m/%Y %H:%M")
+                    row["__cf_to_datetime"] = day_end.strftime("%d/%m/%Y %H:%M")
+
+                out_rows.append(row)
 
         if not out_rows:
             return df
 
         result = pd.DataFrame(out_rows)
-        logger.info("hourly_pivot: %d sensors → %d rows × %d cols", len(sensors), len(result), len(result.columns))
+        logger.info("hourly_pivot: %d sensors → %d rows × %d cols (days=%d)", len(sensors), len(result), len(result.columns), num_days)
         return result
 
     def _apply_window_diff(self, df, rule: dict, loader) -> "pd.DataFrame":

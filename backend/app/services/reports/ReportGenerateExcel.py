@@ -1778,6 +1778,10 @@ def fill_and_print(
     ALL_KNOWN_TOKENS = set(HEADER_TOKENS) | set(ROW_TOKENS) | set(TOTALS.keys()) | set(LITERALS.keys())
     html_multi = blank_known_tokens(html_multi, ALL_KNOWN_TOKENS)
 
+    # Blank any remaining unfilled {tokens} (e.g. {batch_date} in single-day mode)
+    import re as _re
+    html_multi = _re.sub(r'\{(\w+)\}', '', html_multi)
+
     # Strip internal BATCH markers — they are pipeline internals and must not leak into output
     html_multi = html_multi.replace(BEGIN_TAG, "").replace(END_TAG, "")
 

@@ -74,15 +74,25 @@ def _parse_html_to_rows(html_text: str):
     data_row_positions: list[int] = []
     preface_ranges: list[tuple[int, int]] = []
     data_header_row_idx: int | None = None
+    # Track ALL data table header rows for multi-day styling
+    all_data_header_rows: list[int] = []
 
     if tables:
         best_idx = _select_best_table_index(tables)
         data_thead_count = thead_counts[best_idx] if best_idx < len(thead_counts) else 1
+        # Determine the column count of the "best" data table to identify similar tables
+        best_col_count = max((len(r) for r in tables[best_idx]), default=0) if tables[best_idx] else 0
 
         for idx, table in enumerate(tables):
-            is_data_table = idx == best_idx
             if not table:
                 continue
+            # A table is a "data table" if it's the best one OR has the same column count
+            # and thead count (i.e. same structure as the best data table)
+            table_col_count = max((len(r) for r in table), default=0)
+            table_thead = thead_counts[idx] if idx < len(thead_counts) else 0
+            is_data_table = (idx == best_idx) or (
+                table_col_count == best_col_count and table_thead == data_thead_count and table_thead > 0
+            )
             serial_counter = 0
             table_start_idx = len(rows) + 1
             header_rows = data_thead_count if is_data_table else 1
@@ -97,7 +107,9 @@ def _parse_html_to_rows(html_text: str):
                         if not clean_row[0]:
                             clean_row[0] = str(serial_counter)
                 elif is_data_table and row_idx_in_table == header_rows - 1:
-                    data_header_row_idx = len(rows) + 1
+                    if data_header_row_idx is None:
+                        data_header_row_idx = len(rows) + 1
+                    all_data_header_rows.append(len(rows) + 1)
                 rows.append(clean_row)
                 if is_data_table and row_idx_in_table >= header_rows:
                     data_row_positions.append(len(rows))
@@ -120,7 +132,7 @@ def _parse_html_to_rows(html_text: str):
         if row and len(row) < max_cols:
             rows[i] = row + [""] * (max_cols - len(row))
 
-    return rows, data_row_positions, preface_ranges, data_header_row_idx
+    return rows, data_row_positions, preface_ranges, data_header_row_idx, all_data_header_rows
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +142,7 @@ def _parse_html_to_rows(html_text: str):
 def _html_file_to_xlsx_xlsxwriter(html_path: Path, output_path: Path) -> Optional[Path]:
     """Export HTML to XLSX using xlsxwriter (streaming writer, constant memory)."""
     html_text = html_path.read_text(encoding="utf-8", errors="ignore")
-    rows, data_row_positions, preface_ranges, data_header_row_idx = _parse_html_to_rows(html_text)
+    rows, data_row_positions, preface_ranges, data_header_row_idx, all_data_header_rows = _parse_html_to_rows(html_text)
 
     data_start = data_row_positions[0] if data_row_positions else None
     data_end = data_row_positions[-1] if data_row_positions else None
@@ -194,10 +206,14 @@ def _html_file_to_xlsx_xlsxwriter(html_path: Path, output_path: Path) -> Optiona
 
     # Build set lookups for fast row classification
     preface_row_set: set[int] = set()
+    title_row_set: set[int] = set()  # First row of each preface block (the title)
     first_preface_row = preface_ranges[0][0] if preface_ranges else None
     for start_idx, end_idx in preface_ranges:
+        title_row_set.add(start_idx)
         for ri in range(start_idx, end_idx + 1):
             preface_row_set.add(ri)
+    data_row_set: set[int] = set(data_row_positions)
+    data_header_set: set[int] = set(all_data_header_rows)
 
     # Track max column widths for auto-sizing
     col_widths: dict[int, int] = {}
@@ -207,16 +223,18 @@ def _html_file_to_xlsx_xlsxwriter(html_path: Path, output_path: Path) -> Optiona
             continue
 
         # Determine format for this row
-        is_preface = r_idx in preface_row_set
-        is_data_header = r_idx == data_header_row_idx
-        is_title = is_preface and r_idx == first_preface_row
+        # Data headers and data rows take priority over preface detection
+        is_data_header = r_idx in data_header_set
+        is_data_row = r_idx in data_row_set
+        is_preface = r_idx in preface_row_set and not is_data_header and not is_data_row
+        is_title = is_preface and r_idx in title_row_set
 
-        if is_title:
+        if is_data_header:
+            row_fmt = fmt_data_header
+        elif is_title:
             row_fmt = fmt_title
         elif is_preface:
             row_fmt = fmt_preface
-        elif is_data_header:
-            row_fmt = fmt_data_header
         elif r_idx == 1:
             row_fmt = fmt_bold
         else:
@@ -252,11 +270,12 @@ def _html_file_to_xlsx_xlsxwriter(html_path: Path, output_path: Path) -> Optiona
     elif len(rows) > 1:
         ws.freeze_panes(1, 0)
 
-    # Autofilter on the data range
-    if data_header_row_idx and data_end:
-        ws.autofilter(data_header_row_idx - 1, 0, data_end - 1, data_max_cols - 1)
-    elif len(rows) > 0:
-        ws.autofilter(0, 0, len(rows) - 1, sheet_width - 1)
+    # Autofilter on the data range (only for single-table reports)
+    if len(all_data_header_rows) <= 1:
+        if data_header_row_idx and data_end:
+            ws.autofilter(data_header_row_idx - 1, 0, data_end - 1, data_max_cols - 1)
+        elif len(rows) > 0:
+            ws.autofilter(0, 0, len(rows) - 1, sheet_width - 1)
 
     try:
         wb.close()
@@ -308,7 +327,7 @@ def _auto_column_widths(worksheet) -> None:
 def _html_file_to_xlsx_openpyxl(html_path: Path, output_path: Path) -> Optional[Path]:
     """Export HTML to XLSX using openpyxl (in-memory — may OOM on large reports)."""
     html_text = html_path.read_text(encoding="utf-8", errors="ignore")
-    rows, data_row_positions, preface_ranges, data_header_row_idx = _parse_html_to_rows(html_text)
+    rows, data_row_positions, preface_ranges, data_header_row_idx, all_data_header_rows = _parse_html_to_rows(html_text)
 
     data_start = data_row_positions[0] if data_row_positions else None
     data_end = data_row_positions[-1] if data_row_positions else None
@@ -373,15 +392,16 @@ def _html_file_to_xlsx_openpyxl(html_path: Path, output_path: Path) -> Optional[
         PatternFill is not None
         and Alignment is not None
         and Font is not None
-        and data_header_row_idx is not None
         and data_max_cols > 0
+        and all_data_header_rows
     ):
         data_header_fill = PatternFill("solid", fgColor="2F75B5")
-        for col_idx in range(1, data_max_cols + 1):
-            cell = ws.cell(row=data_header_row_idx, column=col_idx)
-            cell.fill = data_header_fill
-            cell.font = Font(color="FFFFFF", bold=True)
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        for hdr_row_idx in all_data_header_rows:
+            for col_idx in range(1, data_max_cols + 1):
+                cell = ws.cell(row=hdr_row_idx, column=col_idx)
+                cell.fill = data_header_fill
+                cell.font = Font(color="FFFFFF", bold=True)
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     if Border is not None and Side is not None:
         thin = Side(style="thin", color="FFC0C0C0")

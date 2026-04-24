@@ -836,6 +836,9 @@ async def clear_all_notifications(
 @router.post("/bulk/templates/delete")
 async def bulk_delete_templates(payload: BulkTemplateRequest) -> Dict[str, Any]:
     """Delete multiple templates in bulk."""
+    import shutil
+    from backend.legacy.utils.template_utils import normalize_template_id, template_dir
+
     template_ids = payload.templateIds
 
     deleted = []
@@ -843,6 +846,15 @@ async def bulk_delete_templates(payload: BulkTemplateRequest) -> Dict[str, Any]:
 
     for tid in template_ids:
         try:
+            # Remove template directory from disk (same as single delete)
+            normalized = normalize_template_id(tid)
+            for kind in ("pdf", "excel"):
+                try:
+                    tdir = template_dir(normalized, must_exist=False, create=False, kind=kind)
+                    if tdir.exists():
+                        shutil.rmtree(tdir, ignore_errors=True)
+                except Exception:
+                    pass
             state_access.delete_template(tid)
             deleted.append(tid)
             state_access.log_activity(

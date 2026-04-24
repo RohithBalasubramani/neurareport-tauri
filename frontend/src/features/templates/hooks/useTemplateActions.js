@@ -52,36 +52,20 @@ export default function useTemplateActions({ templates, removeTemplate, setTempl
     setDeleteConfirmOpen(false)
     setDeletingTemplate(null)
 
-    // Optimistic removal — bypass execute() governance wrapper to avoid
-    // re-render conflicts between governance state and template list state.
+    // Optimistic removal — use store's removeTemplate to clean up all references
     removeTemplate(templateToDelete.id)
 
-    let undone = false
-    const deleteTimeout = setTimeout(async () => {
-      if (undone) return
-      try {
-        await api.deleteTemplate(templateToDelete.id)
-        await fetchTemplatesData()
-      } catch (err) {
+    // Fire the API call immediately so the delete is durable even if the page re-renders
+    api.deleteTemplate(templateToDelete.id)
+      .then(() => fetchTemplatesData())
+      .catch((err) => {
         toast.show('Failed to remove design', 'error')
         if (templateData) {
           setTemplates((prev) => [...prev, templateData])
         }
-      }
-    }, 5000)
+      })
 
-    toast.showWithUndo(
-      `"${templateToDelete.name || templateToDelete.id}" removed`,
-      () => {
-        undone = true
-        clearTimeout(deleteTimeout)
-        if (templateData) {
-          setTemplates((prev) => [...prev, templateData])
-        }
-        toast.show('Design restored', 'success')
-      },
-      { severity: 'info' }
-    )
+    toast.show(`"${templateToDelete.name || templateToDelete.id}" removed`, 'info')
   }, [deletingTemplate, templates, removeTemplate, setTemplates, toast, fetchTemplatesData])
 
   const handleExport = useCallback(async () => {

@@ -1,7 +1,7 @@
 /**
  * Hook: Bulk actions — select, delete, status, tags
  */
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback } from 'react'
 import { useToast } from '@/components/ToastProvider'
 import {
   useInteraction,
@@ -21,7 +21,6 @@ export default function useTemplateBulkActions({ templates, setTemplates, fetchT
   const [bulkTagsOpen, setBulkTagsOpen] = useState(false)
   const [bulkTags, setBulkTags] = useState('')
   const [bulkActionLoading, setBulkActionLoading] = useState(false)
-  const bulkDeleteUndoRef = useRef(null)
 
   const handleBulkDeleteOpen = useCallback(() => {
     if (!selectedIds.length) return
@@ -45,21 +44,13 @@ export default function useTemplateBulkActions({ templates, setTemplates, fetchT
     setBulkDeleteOpen(false)
     setSelectedIds([])
 
-    if (bulkDeleteUndoRef.current?.timeoutId) {
-      clearTimeout(bulkDeleteUndoRef.current.timeoutId)
-      bulkDeleteUndoRef.current = null
-    }
-
-    // Optimistic removal — bypass execute() governance wrapper to avoid
-    // re-render conflicts between governance state and template list state.
+    // Optimistic removal — use setTemplates to filter out deleted items
     setTemplates((prev) => prev.filter((tpl) => !idsToDelete.includes(tpl.id)))
 
-    let undone = false
-    const timeoutId = setTimeout(async () => {
-      if (undone) return
-      setBulkActionLoading(true)
-      try {
-        const result = await api.bulkDeleteTemplates(idsToDelete)
+    // Fire the API call immediately so the delete is durable even if the page crashes
+    setBulkActionLoading(true)
+    api.bulkDeleteTemplates(idsToDelete)
+      .then(async (result) => {
         const deletedCount = result?.deletedCount ?? result?.deleted?.length ?? 0
         const failedCount = result?.failedCount ?? result?.failed?.length ?? 0
         if (failedCount > 0) {
@@ -67,39 +58,22 @@ export default function useTemplateBulkActions({ templates, setTemplates, fetchT
             `Removed ${deletedCount} design${deletedCount !== 1 ? 's' : ''}, ${failedCount} failed`,
             'warning'
           )
-        } else {
-          toast.show(`Removed ${deletedCount} design${deletedCount !== 1 ? 's' : ''}`, 'success')
         }
         await fetchTemplatesData()
-      } catch (err) {
+      })
+      .catch((err) => {
         toast.show('Failed to remove designs', 'error')
         setTemplates((prev) => {
           const existing = new Set(prev.map((tpl) => tpl.id))
           const restored = removedTemplates.filter((tpl) => !existing.has(tpl.id))
           return restored.length ? [...prev, ...restored] : prev
         })
-      } finally {
+      })
+      .finally(() => {
         setBulkActionLoading(false)
-      }
-    }, 5000)
+      })
 
-    bulkDeleteUndoRef.current = { timeoutId, ids: idsToDelete, templates: removedTemplates }
-
-    toast.showWithUndo(
-      `Removed ${count} design${count !== 1 ? 's' : ''}`,
-      () => {
-        undone = true
-        clearTimeout(timeoutId)
-        bulkDeleteUndoRef.current = null
-        setTemplates((prev) => {
-          const existing = new Set(prev.map((tpl) => tpl.id))
-          const restored = removedTemplates.filter((tpl) => !existing.has(tpl.id))
-          return restored.length ? [...prev, ...restored] : prev
-        })
-        toast.show('Designs restored', 'success')
-      },
-      { severity: 'info' }
-    )
+    toast.show(`Removed ${count} design${count !== 1 ? 's' : ''}`, 'info')
   }, [selectedIds, templates, toast, fetchTemplatesData, setTemplates])
 
   const handleBulkStatusApply = useCallback(async () => {

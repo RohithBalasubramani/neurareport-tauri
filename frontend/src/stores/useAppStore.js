@@ -322,7 +322,10 @@ export const useAppStore = create((set, get) => ({
 
   // Templates in app (only approved listed in Generate by default)
   templates: [],
-  setTemplates: (templates) => set({ templates }),
+  setTemplates: (templates) =>
+    set(typeof templates === 'function'
+      ? (state) => ({ templates: templates(state.templates) })
+      : { templates }),
   addTemplate: (tpl) => set((state) => ({ templates: [tpl, ...state.templates] })),
   removeTemplate: (id) =>
     set((state) => {

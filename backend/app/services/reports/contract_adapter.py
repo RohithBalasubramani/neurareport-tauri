@@ -1343,6 +1343,13 @@ class ContractAdapter:
                 logger.info("run_hours_diff: skipping day %s — no data", day_val)
                 continue
 
+            # Skip ghost boundary days (only boundary readings at hour_start)
+            ts_day = _coerce_datetime_series(day_df[ts_col])
+            distinct_hours = ts_day.dt.hour.nunique()
+            if distinct_hours <= 1 and ts_day.dt.hour.iloc[0] == hour_start:
+                logger.info("run_hours_diff: skipping day %s — only boundary reading", day_val)
+                continue
+
             day_start = pd.Timestamp(day_val) + pd.Timedelta(hours=hour_start)
             day_end = day_start + pd.Timedelta(hours=24)
             day_label = day_start.strftime("%d/%m/%Y")
@@ -1527,6 +1534,13 @@ class ContractAdapter:
                 logger.info("hourly_pivot: skipping day %s — no sensor data", day_val)
                 continue
 
+            # Skip ghost boundary days — days that only have data at exactly hour_start
+            # (caused by end_date aligning with the day boundary, e.g. end=Apr11 06:00)
+            distinct_hours = day_df["__hour__"].nunique()
+            if distinct_hours <= 1 and day_df["__hour__"].iloc[0] == hour_start:
+                logger.info("hourly_pivot: skipping day %s — only boundary reading at hour %d", day_val, hour_start)
+                continue
+
             # Format the day label and boundaries
             day_start = pd.Timestamp(day_val) + pd.Timedelta(hours=hour_start)
             day_end = day_start + pd.Timedelta(hours=24)
@@ -1568,10 +1582,16 @@ class ContractAdapter:
                         row.update({"row_max": "", "row_max_datetime": "", "row_min": "", "row_min_datetime": "", "row_avg": ""})
 
                 # Hourly values: single reading closest to the top of each hour
+                # Only consider rows where this sensor has a non-null value
+                # (important for UNION ALL views like PT_ALL where rows from different
+                # tables are interleaved and each row only has data for its own sensors)
+                raw_valid_mask = raw.notna()
                 for offset in range(24):
                     h = (hour_start + offset) % 24
                     mask = day_df["__hour__"] == h
-                    subset = day_df.loc[mask].copy()
+                    # Filter to rows that have a value for this sensor
+                    sensor_mask = mask & raw_valid_mask
+                    subset = day_df.loc[sensor_mask].copy()
                     col_key = f"row_h{offset}"
                     if subset.empty:
                         row[col_key] = ""

@@ -1350,10 +1350,10 @@ class ContractAdapter:
             sr = 0
             for desc, group in day_df.groupby(group_col, sort=True):
                 sr += 1
-                secs = pd.to_numeric(group[seconds_col], errors="coerce")
+                secs = pd.to_numeric(group[seconds_col], errors="coerce").dropna()
                 first_s = secs.iloc[0] if not secs.empty else 0
                 last_s = secs.iloc[-1] if not secs.empty else 0
-                diff = abs(int(last_s - first_s))
+                diff = abs(int(last_s - first_s)) if pd.notna(first_s) and pd.notna(last_s) else 0
                 h, rem = divmod(diff, 3600)
                 m, s = divmod(rem, 60)
                 row = {

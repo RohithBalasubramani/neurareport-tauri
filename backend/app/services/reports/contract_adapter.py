@@ -1634,7 +1634,7 @@ class ContractAdapter:
                         shift_b = _shift_diff(14, 22)
                         shift_c = _shift_diff(22, 6, wrap=True)
 
-                        _td = totalizer_divisor
+                        _td = float(sensor.get("totalizer_divisor", totalizer_divisor))
                         row["row_shift_a"] = f"{shift_a / _td:.2f}" if shift_a is not None else ""
                         row["row_shift_b"] = f"{shift_b / _td:.2f}" if shift_b is not None else ""
                         row["row_shift_c"] = f"{shift_c / _td:.2f}" if shift_c is not None else ""

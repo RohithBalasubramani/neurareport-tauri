@@ -177,6 +177,9 @@ try:
         and 'webkit' not in src.lower()
         and 'playwright-browsers' not in src.lower()
         and 'ms-playwright' not in src.lower()
+        # Exclude Vite browser stubs — deeply nested paths exceed Windows 260-char limit
+        and '/vite/' not in src
+        and '\\vite\\' not in src
     ]
     datas.extend(_pw_datas)
     print(f"[SPEC DEBUG] Playwright data files (driver only): {len(_pw_datas)} entries")

@@ -1273,17 +1273,49 @@ class ContractAdapter:
                     existing_groups = [g for g in group_by_aliases if g in df.columns]
                     if existing_groups:
                         # numeric_agg controls how value columns collapse per group.
-                        #   "sum" (default)   — additive measures
-                        #   "delta"           — cumulative totalizers: per-group
-                        #                       consumption = max - min (robust to
-                        #                       lifetime counters and daily resets)
+                        #   "sum" (default) — additive measures
+                        #   "delta"         — cumulative totalizers: per-group
+                        #                     consumption = last - first reading
+                        #                     (chronological); immune to mid-series
+                        #                     glitch readings, clamped at 0.
+                        #   "max_minus_min" — order-independent range (legacy)
                         numeric_agg = str(rule.get("numeric_agg", "sum")).lower()
+                        chrono = numeric_agg in ("delta", "last_minus_first", "consumption")
 
-                        def _delta(series):
+                        if chrono:
+                            ts_src = None
+                            for cs in columns:
+                                for f in cs.get("from", []):
+                                    md = re.match(r"date\((.+)\)", str(f), re.IGNORECASE)
+                                    if md:
+                                        inner = md.group(1)
+                                        ts_src = inner.split(".", 1)[1] if "." in inner else inner
+                            if ts_src and ts_src in df.columns:
+                                try:
+                                    _key = _coerce_datetime_series(df[ts_src])
+                                    df = (df.assign(__ts_sort__=_key)
+                                            .sort_values("__ts_sort__", kind="stable")
+                                            .drop(columns="__ts_sort__"))
+                                except Exception:
+                                    df = df.sort_values(ts_src, kind="stable")
+
+                        def _last_minus_first(series):
+                            s = series.dropna()
+                            if not len(s):
+                                return 0
+                            v = s.iloc[-1] - s.iloc[0]
+                            return v if v > 0 else 0
+
+                        def _max_minus_min(series):
                             s = series.dropna()
                             return (s.max() - s.min()) if len(s) else 0
 
-                        num_func = _delta if numeric_agg in ("delta", "max_minus_min", "consumption") else "sum"
+                        if chrono:
+                            num_func = _last_minus_first
+                        elif numeric_agg in ("max_minus_min", "range"):
+                            num_func = _max_minus_min
+                        else:
+                            num_func = "sum"
                         agg_map = {}
                         for col in df.columns:
                             if col in existing_groups:

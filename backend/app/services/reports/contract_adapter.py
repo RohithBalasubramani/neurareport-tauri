@@ -1272,16 +1272,28 @@ class ContractAdapter:
                         ]
                     existing_groups = [g for g in group_by_aliases if g in df.columns]
                     if existing_groups:
+                        # numeric_agg controls how value columns collapse per group.
+                        #   "sum" (default)   — additive measures
+                        #   "delta"           — cumulative totalizers: per-group
+                        #                       consumption = max - min (robust to
+                        #                       lifetime counters and daily resets)
+                        numeric_agg = str(rule.get("numeric_agg", "sum")).lower()
+
+                        def _delta(series):
+                            s = series.dropna()
+                            return (s.max() - s.min()) if len(s) else 0
+
+                        num_func = _delta if numeric_agg in ("delta", "max_minus_min", "consumption") else "sum"
                         agg_map = {}
                         for col in df.columns:
                             if col in existing_groups:
                                 continue
                             if pd.api.types.is_numeric_dtype(df[col]):
-                                agg_map[col] = "sum"
+                                agg_map[col] = num_func
                             else:
                                 agg_map[col] = "first"
                         df = df.groupby(existing_groups, sort=True).agg(agg_map).reset_index()
-                        logger.info("select_group_by applied → %d rows", len(df))
+                        logger.info("select_group_by applied (numeric_agg=%s) → %d rows", numeric_agg, len(df))
 
             elif strategy == "WINDOW_DIFF":
                 # Detect run intervals from cumulative counter changes.

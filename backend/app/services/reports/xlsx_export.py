@@ -29,7 +29,13 @@ except ImportError:  # pragma: no cover
     Table = None  # type: ignore
     TableStyleInfo = None  # type: ignore
 
-from .html_table_parser import extract_first_table, extract_tables, extract_tables_with_header_counts
+from .html_table_parser import (
+    extract_first_table,
+    extract_tables,
+    extract_tables_with_header_counts,
+    extract_table_grids,
+    html_has_table_spans,
+)
 
 logger = logging.getLogger("neura.reports.xlsx")
 
@@ -139,9 +145,172 @@ def _parse_html_to_rows(html_text: str):
 # xlsxwriter-based export (streaming, constant memory)
 # ---------------------------------------------------------------------------
 
+def _contrast_color(hex_color: str) -> str:
+    """Return black/white font color for best contrast against a hex background."""
+    h = (hex_color or "").lstrip("#")
+    if len(h) != 6:
+        return "#000000"
+    try:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return "#000000"
+    return "#000000" if (0.299 * r + 0.587 * g + 0.114 * b) > 140 else "#FFFFFF"
+
+
+_NUMERIC_RE = __import__("re").compile(r"^-?[\d,]+(?:\.\d+)?$")
+
+
+def _export_xlsx_with_spans_xlsxwriter(html_text: str, output_path: Path) -> Optional[Path]:
+    """Render a report whose table uses colspan/rowspan into XLSX, honouring
+    merged cells and per-cell header colors (grouped multi-tier headers).
+
+    Activated only when the HTML contains colspan/rowspan, so all existing
+    single-row-header reports keep the original (untouched) export path.
+    """
+    grids = extract_table_grids(html_text)
+    if not grids:
+        return None
+
+    # Data table = the grid with the most columns (tiebreak: most rows).
+    data_gi = max(range(len(grids)), key=lambda i: (grids[i]["n_cols"], grids[i]["n_rows"]))
+    data_grid = grids[data_gi]
+    data_width = max(1, data_grid["n_cols"])
+    thead_count = data_grid["thead_count"]
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wb = _xlsxwriter.Workbook(str(output_path), {"constant_memory": False})
+    ws = wb.add_worksheet("Report")
+
+    _fmt_cache: dict = {}
+
+    def fmt(**props):
+        key = tuple(sorted((k, str(v)) for k, v in props.items()))
+        f = _fmt_cache.get(key)
+        if f is None:
+            f = wb.add_format(props)
+            _fmt_cache[key] = f
+        return f
+
+    BORDER = {"border": 1, "border_color": "#BFBFBF"}
+    col_text_len: dict[int, int] = {}
+
+    def _track_width(col: int, text: str, span: int):
+        if span != 1:
+            return
+        n = len(str(text)) if text else 0
+        if n > col_text_len.get(col, 0):
+            col_text_len[col] = n
+
+    cur = 0  # 0-based xlsx row cursor
+
+    def _render_preface(grid):
+        nonlocal cur
+        anchors_by_row: dict[int, list] = {}
+        for p in grid["placements"]:
+            anchors_by_row.setdefault(p[0], []).append(p)
+        for r in range(grid["n_rows"]):
+            cells = sorted(anchors_by_row.get(r, []), key=lambda p: p[1])
+            text = " ".join(c[4]["text"] for c in cells if c[4]["text"]).strip()
+            if not text:
+                continue
+            if r == 0:
+                f = fmt(bold=True, font_size=14, bg_color="#BDD7EE", align="center",
+                        valign="vcenter", text_wrap=True, **BORDER)
+            elif r == 1:
+                f = fmt(bold=True, font_size=12, bg_color="#D9E1F2", align="center",
+                        valign="vcenter", text_wrap=True, **BORDER)
+            else:
+                f = fmt(bold=True, font_size=10, align="left", valign="vcenter", text_wrap=True)
+            if data_width > 1:
+                ws.merge_range(cur, 0, cur, data_width - 1, text, f)
+            else:
+                ws.write(cur, 0, text, f)
+            cur += 1
+        cur += 1  # blank separator
+
+    def _render_data(grid):
+        nonlocal cur
+        anchors_by_row: dict[int, list] = {}
+        for p in grid["placements"]:
+            anchors_by_row.setdefault(p[0], []).append(p)
+        start = cur
+        serial = 0
+        for r in range(grid["n_rows"]):
+            cells = anchors_by_row.get(r, [])
+            in_head = r < thead_count
+            is_total = any((c[4]["text"] or "").strip().lower() == "total" for c in cells)
+            if not in_head and not is_total:
+                serial += 1
+            for (cr, cc, rs, cs, cell) in cells:
+                text = cell["text"]
+                # Fill serial number into the empty first column of data rows.
+                if (not in_head) and cc == 0 and cs == 1 and not text:
+                    text = "" if is_total else str(serial)
+                if in_head:
+                    bg = cell["bg"] or "#D9E1F2"
+                    fg = cell["fg"] or _contrast_color(bg)
+                    f = fmt(bold=True, bg_color=bg, font_color=fg, align="center",
+                            valign="vcenter", text_wrap=True, **BORDER)
+                else:
+                    align = "right" if _NUMERIC_RE.match((text or "").strip()) else (
+                        "center" if cc <= 1 else "left")
+                    props = dict(valign="vcenter", text_wrap=True, align=align, **BORDER)
+                    if is_total:
+                        props["bold"] = True
+                        props["bg_color"] = "#F2F2F2"
+                    if cell["bg"]:
+                        props["bg_color"] = cell["bg"]
+                        props["font_color"] = cell["fg"] or _contrast_color(cell["bg"])
+                    f = fmt(**props)
+                _track_width(cc, text, cs)
+                if rs > 1 or cs > 1:
+                    ws.merge_range(start + cr, cc, start + cr + rs - 1, cc + cs - 1, text, f)
+                else:
+                    ws.write(start + cr, cc, text, f)
+        cur = start + grid["n_rows"]
+        return start
+
+    data_header_abs = None
+    for gi, grid in enumerate(grids):
+        if gi == data_gi:
+            data_start = _render_data(grid)
+            data_header_abs = data_start + thead_count  # first body row (0-based) → freeze here
+        else:
+            _render_preface(grid)
+
+    for c_idx, n in col_text_len.items():
+        ws.set_column(c_idx, c_idx, min(60, max(10, n + 2)))
+    if data_header_abs is not None:
+        ws.freeze_panes(data_header_abs, 0)
+
+    try:
+        wb.close()
+    except Exception as exc:  # pragma: no cover
+        logger.warning("xlsx_export_save_failed", extra={
+            "event": "xlsx_export_save_failed", "xlsx_path": str(output_path),
+            "error": str(exc), "engine": "xlsxwriter-spans"})
+        return None
+    logger.info("xlsx_export_success", extra={
+        "event": "xlsx_export_success", "xlsx_path": str(output_path),
+        "engine": "xlsxwriter-spans"})
+    return output_path
+
+
 def _html_file_to_xlsx_xlsxwriter(html_path: Path, output_path: Path) -> Optional[Path]:
     """Export HTML to XLSX using xlsxwriter (streaming writer, constant memory)."""
     html_text = html_path.read_text(encoding="utf-8", errors="ignore")
+
+    # Grouped / multi-tier headers (colspan/rowspan) need merge-aware rendering.
+    if html_has_table_spans(html_text):
+        try:
+            result = _export_xlsx_with_spans_xlsxwriter(html_text, output_path)
+            if result is not None:
+                return result
+        except Exception:
+            logger.warning("xlsx_spans_export_failed_fallback", exc_info=True)
+        # fall through to the legacy flat renderer on any failure
+
     rows, data_row_positions, preface_ranges, data_header_row_idx, all_data_header_rows = _parse_html_to_rows(html_text)
 
     data_start = data_row_positions[0] if data_row_positions else None

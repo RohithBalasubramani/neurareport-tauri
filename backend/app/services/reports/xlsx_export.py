@@ -271,11 +271,47 @@ def _export_xlsx_with_spans_xlsxwriter(html_text: str, output_path: Path) -> Opt
         cur = start + grid["n_rows"]
         return start
 
+    def _render_secondary_grid(grid):
+        """Render a small multi-column table (e.g. a per-group summary block) as a
+        real grid stacked below the main table, honouring per-cell colors."""
+        nonlocal cur
+        anchors_by_row: dict[int, list] = {}
+        for p in grid["placements"]:
+            anchors_by_row.setdefault(p[0], []).append(p)
+        start = cur
+        for r in range(grid["n_rows"]):
+            for (cr, cc, rs, cs, cell) in anchors_by_row.get(r, []):
+                text = cell["text"]
+                is_head = cell["header"] or cell["section"] == "thead"
+                is_foot = cell["section"] == "tfoot" or (text or "").strip().lower() == "total"
+                if is_head:
+                    bg = cell["bg"] or "#D9E1F2"
+                    f = fmt(bold=True, bg_color=bg, font_color=cell["fg"] or _contrast_color(bg),
+                            align="center", valign="vcenter", text_wrap=True, **BORDER)
+                else:
+                    is_num = bool(_NUMERIC_RE.match((text or "").strip()))
+                    props = dict(valign="vcenter", text_wrap=True,
+                                 align="right" if is_num else "left", **BORDER)
+                    if is_foot:
+                        props["bold"] = True
+                    if cell["bg"]:
+                        props["bg_color"] = cell["bg"]
+                        props["font_color"] = cell["fg"] or _contrast_color(cell["bg"])
+                    f = fmt(**props)
+                _track_width(cc, text, cs)
+                if rs > 1 or cs > 1:
+                    ws.merge_range(start + cr, cc, start + cr + rs - 1, cc + cs - 1, text, f)
+                else:
+                    ws.write(start + cr, cc, text, f)
+        cur = start + grid["n_rows"] + 1  # blank separator after
+
     data_header_abs = None
     for gi, grid in enumerate(grids):
         if gi == data_gi:
             data_start = _render_data(grid)
             data_header_abs = data_start + thead_count  # first body row (0-based) → freeze here
+        elif grid["n_cols"] >= 2:
+            _render_secondary_grid(grid)
         else:
             _render_preface(grid)
 

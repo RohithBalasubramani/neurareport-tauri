@@ -1247,14 +1247,32 @@ class ContractAdapter:
                     if not alias or not sources:
                         continue
                     src = sources[0]
-                    # Handle date() wrapper
-                    date_match = re.match(r"date\((.+)\)", src, re.IGNORECASE)
-                    if date_match:
-                        inner = date_match.group(1)
+                    # Handle date()/hour()/minute() truncation wrappers.
+                    #   date(col)   → per-day bucket   ("YYYY-MM-DD")
+                    #   hour(col)   → per-hour bucket  ("YYYY-MM-DD HH:00")
+                    #   minute(col) → per-minute bucket("YYYY-MM-DD HH:MM")
+                    #   time(col)   → hour-of-day label ("HH:00"), for hourly rows
+                    trunc_match = re.match(r"(date|hour|minute|time)\((.+)\)", src, re.IGNORECASE)
+                    if trunc_match:
+                        gran = trunc_match.group(1).lower()
+                        inner = trunc_match.group(2)
                         src_col = inner.split(".", 1)[1] if "." in inner else inner
                         if src_col in df.columns:
-                            dt_s = _coerce_datetime_series(df[src_col])
-                            df[alias] = dt_s.dt.strftime("%Y-%m-%d").fillna("")
+                            # Optional rule-level "tz" (e.g. "Asia/Kolkata") converts
+                            # offset-aware timestamps into that timezone BEFORE
+                            # bucketing, so date/hour/time reflect local wall-clock
+                            # time (IST) rather than the stored offset / UTC.
+                            tz = rule.get("tz")
+                            if tz:
+                                dt_s = pd.to_datetime(
+                                    df[src_col].astype(str).str.strip(),
+                                    utc=True, errors="coerce",
+                                ).dt.tz_convert(tz)
+                            else:
+                                dt_s = _coerce_datetime_series(df[src_col])
+                            fmt_str = {"date": "%Y-%m-%d", "hour": "%Y-%m-%d %H:00",
+                                       "minute": "%Y-%m-%d %H:%M", "time": "%H:00"}[gran]
+                            df[alias] = dt_s.dt.strftime(fmt_str).fillna("")
                     else:
                         src_col = src.split(".", 1)[1] if "." in src else src
                         if src_col in df.columns:
@@ -1286,7 +1304,7 @@ class ContractAdapter:
                             ts_src = None
                             for cs in columns:
                                 for f in cs.get("from", []):
-                                    md = re.match(r"date\((.+)\)", str(f), re.IGNORECASE)
+                                    md = re.match(r"(?:date|hour|minute|time)\((.+)\)", str(f), re.IGNORECASE)
                                     if md:
                                         inner = md.group(1)
                                         ts_src = inner.split(".", 1)[1] if "." in inner else inner

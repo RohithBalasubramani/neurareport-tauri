@@ -109,7 +109,7 @@ export default function ScheduleDialog({
   }
 
   const disableSave =
-    saving || !form.name || !form.templateId || !form.connectionId || !form.startDate || !form.endDate
+    saving || !form.name || !form.templateId || !form.connectionId || !form.startDate
 
   return (
     <StyledDialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
@@ -147,7 +147,7 @@ export default function ScheduleDialog({
         <Stack spacing={2.5}>
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
             <StyledTextField label="Start Date" type="date" value={form.startDate} onChange={handleChange('startDate')} InputLabelProps={{ shrink: true }} fullWidth required />
-            <StyledTextField label="End Date" type="date" value={form.endDate} onChange={handleChange('endDate')} InputLabelProps={{ shrink: true }} fullWidth required />
+            <StyledTextField label="End Date (optional)" type="date" value={form.endDate} onChange={handleChange('endDate')} InputLabelProps={{ shrink: true }} fullWidth helperText="Leave blank to run indefinitely" />
           </Stack>
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
             <StyledFormControl fullWidth>

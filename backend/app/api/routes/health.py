@@ -437,22 +437,42 @@ async def scheduler_health(request: Request) -> Dict[str, Any]:
         pass
 
     # Get schedule statistics
-    schedules_info = {"total": 0, "active": 0, "next_run": None}
+    schedules_info = {"total": 0, "active": 0, "next_run": None, "expired": 0, "expired_names": []}
+    expired_active: list[str] = []
     try:
         schedules = state_access.list_schedules()
         schedules_info["total"] = len(schedules)
         schedules_info["active"] = sum(1 for s in schedules if s.get("active", True))
 
-        # Find next scheduled run
+        # Find next scheduled run, and detect active schedules that can no
+        # longer fire because their end_date has already passed. Such schedules
+        # still show as "active" in the UI, but APScheduler computes no next run
+        # for them, so they silently never send again.
         now = datetime.now(timezone.utc)
         next_runs = []
         for s in schedules:
-            if s.get("active", True) and s.get("next_run_at"):
+            if not s.get("active", True):
+                continue
+            end_raw = s.get("end_date")
+            if end_raw:
+                try:
+                    end_dt = datetime.fromisoformat(str(end_raw).replace("Z", "+00:00"))
+                    if end_dt.tzinfo is None:
+                        end_dt = end_dt.replace(tzinfo=timezone.utc)
+                    if end_dt < now:
+                        expired_active.append(s.get("name") or s.get("id") or "unknown")
+                        continue
+                except Exception:
+                    pass
+            if s.get("next_run_at"):
                 try:
                     next_run = datetime.fromisoformat(s["next_run_at"].replace("Z", "+00:00"))
                     next_runs.append((next_run, s.get("name", s.get("id"))))
                 except Exception:
                     pass
+
+        schedules_info["expired"] = len(expired_active)
+        schedules_info["expired_names"] = expired_active
 
         if next_runs:
             next_runs.sort(key=lambda x: x[0])
@@ -473,6 +493,12 @@ async def scheduler_health(request: Request) -> Dict[str, Any]:
     elif not scheduler_running:
         status = "warning"
         message = "Scheduler is enabled but not currently running"
+    elif expired_active:
+        status = "warning"
+        message = (
+            f"{len(expired_active)} active schedule(s) have a past end_date and will never "
+            f"fire again: {', '.join(expired_active[:5])}. Clear or extend the End Date to resume."
+        )
 
     return {
         "status": status,

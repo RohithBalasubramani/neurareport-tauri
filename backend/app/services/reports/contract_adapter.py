@@ -851,12 +851,12 @@ class ContractAdapter:
         s = _parse_date_like(start_date) if start_date else None
         e = _parse_date_like(end_date) if end_date else None
         if s is None or e is None:
-            return "date", "DATE"
+            return "date", "DATE", "DATEWISE"
         if s.date() == e.date():
-            return "time", "TIME"
+            return "time", "TIME", "HOURWISE"
         if (s.year, s.month) == (e.year, e.month):
-            return "date", "DATE"
-        return "month", "MONTH"
+            return "date", "DATE", "DATEWISE"
+        return "month", "MONTH", "MONTHWISE"
 
     def resolve_header_data(
         self,
@@ -871,9 +871,15 @@ class ContractAdapter:
 
         for token in header_tokens:
             mapping_expr = self._mapping.get(token, "")
-            # Dynamic period label for auto-granularity reports (TIME/DATE/MONTH).
-            if mapping_expr.strip().upper() == "PERIOD_LABEL":
+            # Dynamic labels for auto-granularity reports.
+            #   PERIOD_LABEL -> column header (TIME / DATE / MONTH)
+            #   PERIOD_WORD  -> subtitle word (HOURWISE / DATEWISE / MONTHWISE)
+            _mx = mapping_expr.strip().upper()
+            if _mx == "PERIOD_LABEL":
                 result[token] = self._auto_granularity(start_date, end_date)[1]
+                continue
+            if _mx == "PERIOD_WORD":
+                result[token] = self._auto_granularity(start_date, end_date)[2]
                 continue
             # Check if it's a PARAM (PARAM:xxx format)
             pm = _PARAM_RE.match(mapping_expr)

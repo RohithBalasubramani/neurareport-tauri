@@ -840,6 +840,24 @@ class ContractAdapter:
         logger.warning("uninterpretable_legacy_computed", extra={"expr": expr})
         return None
 
+    def _auto_granularity(self, start_date, end_date):
+        """Choose bucket granularity from the selected range:
+          same calendar day        -> ("time",  "TIME")   hourly rows
+          same month, diff days     -> ("date",  "DATE")   daily rows
+          spans more than one month -> ("month", "MONTH")  monthly rows
+        Falls back to date when the range can't be parsed.
+        """
+        from .discovery_excel import _parse_date_like
+        s = _parse_date_like(start_date) if start_date else None
+        e = _parse_date_like(end_date) if end_date else None
+        if s is None or e is None:
+            return "date", "DATE"
+        if s.date() == e.date():
+            return "time", "TIME"
+        if (s.year, s.month) == (e.year, e.month):
+            return "date", "DATE"
+        return "month", "MONTH"
+
     def resolve_header_data(
         self,
         loader,
@@ -852,8 +870,12 @@ class ContractAdapter:
         header_tokens = _ensure_sequence(self._raw.get("header_tokens")) or self._scalar_tokens
 
         for token in header_tokens:
-            # Check if it's a PARAM (PARAM:xxx format)
             mapping_expr = self._mapping.get(token, "")
+            # Dynamic period label for auto-granularity reports (TIME/DATE/MONTH).
+            if mapping_expr.strip().upper() == "PERIOD_LABEL":
+                result[token] = self._auto_granularity(start_date, end_date)[1]
+                continue
+            # Check if it's a PARAM (PARAM:xxx format)
             pm = _PARAM_RE.match(mapping_expr)
             if pm:
                 param_name = pm.group(1)
@@ -912,6 +934,10 @@ class ContractAdapter:
     ):
         """Fetch row data via DataFrame filtering and return a DataFrame."""
         import pandas as pd
+
+        # Remember the selected range so auto() buckets can pick granularity.
+        self._resolve_start_date = start_date
+        self._resolve_end_date = end_date
 
         row_tokens = _ensure_sequence(self._raw.get("row_tokens")) or self._row_tokens
         if not row_tokens:
@@ -1252,9 +1278,15 @@ class ContractAdapter:
                     #   hour(col)   → per-hour bucket  ("YYYY-MM-DD HH:00")
                     #   minute(col) → per-minute bucket("YYYY-MM-DD HH:MM")
                     #   time(col)   → hour-of-day label ("HH:00"), for hourly rows
-                    trunc_match = re.match(r"(date|hour|minute|time)\((.+)\)", src, re.IGNORECASE)
+                    trunc_match = re.match(r"(date|month|hour|minute|time|auto)\((.+)\)", src, re.IGNORECASE)
                     if trunc_match:
                         gran = trunc_match.group(1).lower()
+                        # auto() picks time/date/month from the selected range.
+                        if gran == "auto":
+                            gran = self._auto_granularity(
+                                getattr(self, "_resolve_start_date", None),
+                                getattr(self, "_resolve_end_date", None),
+                            )[0]
                         inner = trunc_match.group(2)
                         src_col = inner.split(".", 1)[1] if "." in inner else inner
                         if src_col in df.columns:
@@ -1270,8 +1302,13 @@ class ContractAdapter:
                                 ).dt.tz_convert(tz)
                             else:
                                 dt_s = _coerce_datetime_series(df[src_col])
-                            fmt_str = {"date": "%Y-%m-%d", "hour": "%Y-%m-%d %H:00",
-                                       "minute": "%Y-%m-%d %H:%M", "time": "%H:00"}[gran]
+                            # "hour_end": label an hour by its END, so "00:00" means
+                            # the 23:00→00:00 hour (shift +1h before formatting).
+                            if gran in ("hour", "time") and rule.get("hour_end"):
+                                dt_s = dt_s + pd.Timedelta(hours=1)
+                            fmt_str = {"date": "%Y-%m-%d", "month": "%Y-%m",
+                                       "hour": "%Y-%m-%d %H:00", "minute": "%Y-%m-%d %H:%M",
+                                       "time": "%H:00"}[gran]
                             df[alias] = dt_s.dt.strftime(fmt_str).fillna("")
                     else:
                         src_col = src.split(".", 1)[1] if "." in src else src

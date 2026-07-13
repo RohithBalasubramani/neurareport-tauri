@@ -1,6 +1,14 @@
 ; Kill running NeuraReport processes before installing new files.
 ; This prevents "Error opening file for writing: MSVCP140.dll" when
 ; the backend is still running from a previous session.
+;
+; EXE NAMES (do not "correct" to NeuraReport.exe):
+;   Main app  = neurareport-desktop.exe  (Tauri v2 names the binary after the
+;               Cargo [package] name when mainBinaryName is unset — NOT the
+;               productName "NeuraReport", which only names the *installer* file
+;               and the install folder). Confirmed by the Cargo name, the CI
+;               Linux Exec=neurareport-desktop, and the installed AppData folder.
+;   Sidecar   = neurareport-backend.exe
 
 !macro NSIS_HOOK_PREINSTALL
   ; Kill the Python backend sidecar

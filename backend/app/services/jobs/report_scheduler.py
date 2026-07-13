@@ -8,6 +8,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from apscheduler.executors.asyncio import AsyncIOExecutor
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -20,10 +21,27 @@ from backend.app.schemas.generate.reports import RunPayload
 
 logger = logging.getLogger("neura.scheduler")
 
-# Compute the system's local timezone explicitly.  In PyInstaller frozen
-# builds, APScheduler's get_localzone() may fail and silently fall back to
-# UTC.  Using a fixed-offset timezone avoids this completely.
-_LOCAL_TZ = datetime.now(timezone.utc).astimezone().tzinfo
+# Resolve the timezone the scheduler interprets run_time ("HH:MM") in.
+# Priority: NEURA_SCHEDULER_TZ (explicit IANA name) -> system local tz -> UTC.
+# In PyInstaller/frozen builds (e.g. the bundled desktop backend) the system
+# local lookup can silently collapse to UTC, firing jobs at the wrong
+# wall-clock time (a 5.5h skew in IST), so packaged deployments should ALWAYS
+# set NEURA_SCHEDULER_TZ (e.g. "Asia/Kolkata").
+def _resolve_local_tz():
+    tz_name = os.getenv("NEURA_SCHEDULER_TZ", "").strip()
+    if tz_name:
+        try:
+            return ZoneInfo(tz_name)
+        except Exception:
+            logger.warning(
+                "scheduler_tz_invalid",
+                extra={"event": "scheduler_tz_invalid", "tz": tz_name},
+            )
+    tz = datetime.now(timezone.utc).astimezone().tzinfo
+    return tz or timezone.utc
+
+
+_LOCAL_TZ = _resolve_local_tz()
 logger.info("scheduler_timezone", extra={"event": "scheduler_timezone", "tz": str(_LOCAL_TZ)})
 _MISFIRE_GRACE_SECONDS_RAW = os.getenv("NEURA_SCHEDULER_MISFIRE_GRACE_SECONDS", "3600")
 try:
@@ -72,6 +90,56 @@ def _next_run_datetime(schedule: dict, baseline: datetime) -> datetime:
     minutes = schedule.get("interval_minutes") or 0
     minutes = max(int(minutes), 1)
     return baseline + timedelta(minutes=minutes)
+
+
+def _notify_schedule_failure(schedule: dict, error: str) -> None:
+    """Best-effort: email the schedule's recipients that the run failed.
+
+    For scheduled jobs, silence is worse than noise — if a run errors, the user
+    should hear about it instead of just seeing nothing arrive. Controlled by
+    NEURA_MAIL_NOTIFY_ON_FAILURE (default on). Never raises.
+    """
+    try:
+        if os.getenv("NEURA_MAIL_NOTIFY_ON_FAILURE", "true").strip().lower() in (
+            "0", "false", "no", "off",
+        ):
+            return
+        recipients = schedule.get("email_recipients") or []
+        if not recipients:
+            return
+        from backend.app.services.utils.mailer import send_report_email
+
+        name = (
+            schedule.get("name")
+            or schedule.get("template_name")
+            or schedule.get("template_id")
+            or "report"
+        )
+        send_report_email(
+            to_addresses=recipients,
+            subject=f"[NeuraReport] Scheduled report '{name}' failed",
+            body=(
+                f"The scheduled report '{name}' did not complete successfully.\n\n"
+                f"Error: {error}\n\n"
+                "No document was produced. Please check the report configuration or "
+                "data source and try again.\n\n"
+                "— NeuraReport"
+            ),
+            attachments=None,
+        )
+        logger.info(
+            "schedule_failure_notice_sent",
+            extra={
+                "event": "schedule_failure_notice_sent",
+                "schedule_id": schedule.get("id"),
+                "recipients": len(recipients),
+            },
+        )
+    except Exception:
+        logger.exception(
+            "schedule_failure_notice_failed",
+            extra={"event": "schedule_failure_notice_failed"},
+        )
 
 
 def _schedule_signature(schedule: dict) -> str:
@@ -268,7 +336,7 @@ class ReportScheduler:
                     minutes=interval_minutes,
                     start_date=start_date,
                     end_date=end_date,
-                    timezone=timezone.utc,
+                    timezone=_LOCAL_TZ,
                 )
             job = self._scheduler.add_job(
                 self._run_schedule,
@@ -400,6 +468,8 @@ class ReportScheduler:
             )
             if job_tracker:
                 job_tracker.fail("Scheduled report generation failed")
+            # Don't leave the user in silence when a scheduled run errors.
+            _notify_schedule_failure(schedule, f"{type(exc).__name__}: {str(exc)[:400]}")
         else:
             finished = _now_utc()
             next_run = _next_run_datetime(schedule, finished).isoformat()

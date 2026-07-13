@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "NeuraReport",
         "width": 1400,
         "height": 900,
@@ -19,7 +20,8 @@
         "minHeight": 700,
         "resizable": true,
         "fullscreen": false,
-        "center": true
+        "center": true,
+        "visible": false
       }
     ],
     "security": {

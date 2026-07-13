@@ -1,6 +1,8 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::Mutex;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
 struct BackendState {
@@ -95,12 +97,95 @@ fn find_backend_exe(app: &tauri::App) -> Result<std::path::PathBuf, String> {
     ))
 }
 
+/// Show + focus the main window (from a tray click or the tray menu).
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+/// Kill the spawned backend before a real quit (from the tray "Quit" item).
+fn kill_backend(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<Mutex<BackendState>>() {
+        if let Ok(mut s) = state.lock() {
+            if let Some(ref mut child) = s.child {
+                log("[tauri] Killing backend process (quit)");
+                let _ = child.kill();
+            }
+        }
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
+        // Single-instance must be the FIRST plugin. If a second copy is
+        // launched (double-clicking the icon while it's already in the tray,
+        // or the login autostart firing while it's running), we surface the
+        // existing window instead of starting a second backend + scheduler
+        // (which would double-send emails).
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             log("[tauri] NeuraReport desktop starting...");
+
+            // --- System tray ---------------------------------------------
+            // Keeps the app (and its child backend + report scheduler) alive
+            // in the background when the window is closed, so scheduled reports
+            // and Run Now keep working without the window open. A real quit
+            // happens only via the tray "Quit" item.
+            let open_i =
+                MenuItem::with_id(app, "open", "Open NeuraReport", true, None::<&str>)?;
+            let quit_i =
+                MenuItem::with_id(app, "quit", "Quit NeuraReport", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&open_i, &quit_i])?;
+            let mut tray_builder = TrayIconBuilder::with_id("main-tray")
+                .tooltip("NeuraReport")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => show_main_window(app),
+                    "quit" => {
+                        kill_backend(app);
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray_builder = tray_builder.icon(icon.clone());
+            }
+            let _tray = tray_builder.build(app)?;
+
+            // Autostart is registered by the NSIS installer (a HKCU\...\Run
+            // "NeuraReport" entry that launches the app with --minimized), so
+            // there's nothing to self-register here.
+
+            // The main window is created hidden (visible:false in config).
+            // Show it on a normal launch; keep it tray-only when auto-started
+            // at login (--minimized) — avoids a window flash on every boot.
+            let autostarted = std::env::args().any(|a| a == "--minimized");
+            if let Some(w) = app.get_webview_window("main") {
+                if autostarted {
+                    let _ = w.hide();
+                } else {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
 
             let port = portpicker::pick_unused_port().unwrap_or(9070);
             log(&format!("[tauri] Selected port {} for backend", port));
@@ -248,13 +333,13 @@ pub fn run() {
             }
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                let managed: tauri::State<'_, Mutex<BackendState>> = window.state();
-                let mut state = managed.lock().unwrap();
-                if let Some(ref mut child) = state.child {
-                    log("[tauri] Killing backend process");
-                    let _ = child.kill();
-                }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Close-to-tray: hide the window instead of quitting so the
+                // backend + report scheduler keep running in the background.
+                // The backend is only stopped on a real quit (tray "Quit").
+                log("[tauri] Window close -> hiding to tray (backend stays alive)");
+                let _ = window.hide();
+                api.prevent_close();
             }
         })
         .invoke_handler(tauri::generate_handler![

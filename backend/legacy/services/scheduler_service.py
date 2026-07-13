@@ -91,8 +91,11 @@ def create_schedule(payload: ScheduleCreatePayload) -> dict[str, Any]:
     connection = store.get_connection_record(payload.connection_id)
     if not connection:
         raise _http_error(404, "connection_not_found", "Connection not found.")
-    if not payload.start_date or not payload.end_date:
-        raise _http_error(400, "invalid_schedule_range", "Provide both start_date and end_date.")
+    if not payload.start_date:
+        raise _http_error(400, "invalid_schedule_range", "Provide a start_date.")
+    # end_date is optional: a blank end_date means an open-ended schedule that
+    # runs indefinitely. A past end_date would make the trigger compute no next
+    # fire time (silently stopping), so "no end date" is how you run forever.
     interval_minutes = resolve_schedule_interval(payload.frequency, payload.interval_minutes)
     now_iso = utcnow_iso()
     schedule = store.create_schedule(

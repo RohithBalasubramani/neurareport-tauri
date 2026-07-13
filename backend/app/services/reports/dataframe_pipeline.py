@@ -42,6 +42,7 @@ class DataFramePipeline:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         value_filters: Optional[Dict[str, list]] = None,
+        scheduled: bool = False,
     ) -> None:
         self.adapter = contract_adapter
         self.loader = loader
@@ -49,6 +50,7 @@ class DataFramePipeline:
         self.start_date = start_date
         self.end_date = end_date
         self.value_filters = value_filters or {}
+        self.scheduled = scheduled
 
     def execute(self) -> Dict[str, list]:
         """Return ``{"header": [...], "rows": [...], "totals": [...]}``.
@@ -156,6 +158,7 @@ class DataFramePipeline:
                 start_date=self.start_date,
                 end_date=self.end_date,
                 value_filters=self.value_filters,
+                scheduled=self.scheduled,
             )
             if result is None or (isinstance(result, pd.DataFrame) and result.empty):
                 logger.warning(

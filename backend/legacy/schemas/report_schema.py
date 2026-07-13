@@ -9,7 +9,10 @@ class ScheduleCreatePayload(BaseModel):
     template_id: str
     connection_id: str
     start_date: str
-    end_date: str
+    # Optional: omit for an open-ended schedule that runs "every day forever".
+    # A past end_date makes APScheduler compute no next fire time (the schedule
+    # silently stops), so leaving it blank is the correct way to run indefinitely.
+    end_date: Optional[str] = None
     key_values: Optional[dict[str, Any]] = None
     batch_ids: Optional[list[str]] = None
     docx: bool = False

@@ -533,6 +533,7 @@ def _run_report_internal(
                 batch_ids=p.batch_ids,
                 KEY_VALUES=key_values_payload,
                 BRAND_KIT_ID=getattr(p, "brand_kit_id", None),
+                SCHEDULED=bool(getattr(p, "schedule_id", None)),
             )
             _ensure_not_cancelled()
             if tmp_html.exists():
@@ -886,6 +887,68 @@ def _maybe_send_email(
         if isinstance(fallback, Path) and fallback.exists():
             attachments.append(fallback)
     if not attachments:
+        # No output file was produced. Do NOT silently drop the notification —
+        # surface it (logs + job step + event) and, unless disabled, email the
+        # recipients a "no output" notice so an empty/failed run is visible
+        # instead of looking like nothing ever happened.
+        reason = (
+            "Report run produced no output file (pdf/docx/xlsx/html) to attach — "
+            "the query may have returned no rows for the window, or rendering did not complete."
+        )
+        logger.warning(
+            "report_email_no_attachment",
+            extra={
+                "event": "report_email_no_attachment",
+                "template_id": p.template_id,
+                "recipients": len(recipients),
+                "correlation_id": correlation_id,
+            },
+        )
+        notice_status = "surfaced"
+        notify_on_empty = os.getenv("NEURA_MAIL_NOTIFY_ON_EMPTY", "true").strip().lower() not in (
+            "0", "false", "no", "off",
+        )
+        if notify_on_empty:
+            _tpl_rec = _state_store().get_template_record(p.template_id) or {}
+            _tpl_name = _tpl_rec.get("name") or p.template_id
+            _base_subject = (p.email_subject or f"Report run for {_tpl_name}").strip() or f"Report run for {_tpl_name}"
+            notice_ok = notification_strategy.send(
+                recipients=recipients,
+                subject=f"{_base_subject} — no output produced",
+                body=(
+                    f"The scheduled report '{_tpl_name}' ({p.template_id}) ran for the window "
+                    f"{p.start_date} -> {p.end_date} but produced no output file to attach.\n\n"
+                    "This usually means the query returned no rows for that date range, or report "
+                    "rendering did not complete. No document is attached.\n\n"
+                    "— NeuraReport"
+                ),
+                attachments=[],
+            )
+            notice_status = "notice_sent" if notice_ok else "notice_failed"
+        if email_step_tracked:
+            job_tracker.step_failed("email", reason)
+        _publish_event_safe(
+            Event(
+                name="notification.failed",
+                payload={
+                    "template_id": p.template_id,
+                    "kind": kind,
+                    "recipients": len(recipients),
+                    "reason": "no_attachment",
+                },
+                correlation_id=correlation_id,
+            )
+        )
+        logger.info(
+            "report_email_attempt",
+            extra={
+                "event": "report_email_attempt",
+                "template_id": p.template_id,
+                "recipients": len(recipients),
+                "correlation_id": correlation_id,
+                "status": f"no_attachment_{notice_status}",
+            },
+        )
         return
     template_record = _state_store().get_template_record(p.template_id) or {}
     template_name = template_record.get("name") or p.template_id

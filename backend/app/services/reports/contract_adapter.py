@@ -937,6 +937,7 @@ class ContractAdapter:
         start_date: str | None = None,
         end_date: str | None = None,
         value_filters: Dict[str, list] | None = None,
+        scheduled: bool = False,
     ):
         """Fetch row data via DataFrame filtering and return a DataFrame."""
         import pandas as pd
@@ -1026,7 +1027,7 @@ class ContractAdapter:
 
         melt_alias_set: set[str] = set()
         if self._reshape_rules:
-            df = self._apply_reshape_df(df, loader, source_table)
+            df = self._apply_reshape_df(df, loader, source_table, scheduled=scheduled)
             logger.info("resolve_row_data: %d rows after reshape", len(df))
             # Build set of reshape alias column names for fallback resolution
             for rule in self._reshape_rules:
@@ -1188,7 +1189,7 @@ class ContractAdapter:
 
         return result
 
-    def _apply_reshape_df(self, df, loader, source_table: str):
+    def _apply_reshape_df(self, df, loader, source_table: str, scheduled: bool = False):
         """Apply reshape rules (UNION_ALL / MELT) to produce long-form data."""
         import pandas as pd
 
@@ -1299,6 +1300,7 @@ class ContractAdapter:
                 # and SUM all numeric columns.
                 from .discovery_excel import _coerce_datetime_series
 
+                derived_gran: Dict[str, str] = {}
                 for col_spec in columns:
                     alias = col_spec.get("as", "")
                     sources = col_spec.get("from", [])
@@ -1319,6 +1321,7 @@ class ContractAdapter:
                                 getattr(self, "_resolve_start_date", None),
                                 getattr(self, "_resolve_end_date", None),
                             )[0]
+                        derived_gran[alias] = gran
                         inner = trunc_match.group(2)
                         src_col = inner.split(".", 1)[1] if "." in inner else inner
                         if src_col in df.columns:
@@ -1443,6 +1446,50 @@ class ContractAdapter:
                                     agg_map[col] = "first"
                             df = df.groupby(existing_groups, sort=True).agg(agg_map).reset_index()
                             logger.info("select_group_by applied (numeric_agg=%s) → %d rows", numeric_agg, len(df))
+
+                        # For SCHEDULED runs, show only COMPLETED shift-days: drop the
+                        # still-in-progress trailing period (its window has not yet ended
+                        # relative to "now"). This works at ANY run time and for any
+                        # boundary — 6AM→6AM (day_start_hour=6) or midnight→midnight
+                        # (day_start_hour=None) — so a scheduled report always lands on
+                        # the previous completed period. Ad-hoc / interactive runs
+                        # (scheduled=False) keep their partial current row untouched.
+                        # Disable with NEURA_KEEP_OPEN_PERIOD=1.
+                        try:
+                            import os as _os
+                            if scheduled and not _os.getenv("NEURA_KEEP_OPEN_PERIOD"):
+                                _pcol = existing_groups[0]
+                                _pgran = derived_gran.get(_pcol)
+                                if _pgran in ("date", "month"):
+                                    _tzn = rule.get("tz")
+                                    _dshv = int(rule.get("day_start_hour", 0) or 0)
+                                    _nowenv = _os.getenv("NEURA_OPEN_PERIOD_NOW")
+                                    if _nowenv:
+                                        _now = pd.Timestamp(_nowenv)
+                                        if _tzn:
+                                            _now = _now.tz_localize(_tzn) if _now.tzinfo is None else _now.tz_convert(_tzn)
+                                    else:
+                                        _now = pd.Timestamp.now(tz=_tzn) if _tzn else pd.Timestamp.now()
+
+                                    def _win_end(lbl):
+                                        # end of the shift-day/-month that this bucket labels
+                                        if _pgran == "date":
+                                            return pd.Timestamp(lbl, tz=_tzn) + pd.Timedelta(days=1, hours=_dshv)
+                                        _y, _m = (int(x) for x in lbl.split("-")[:2])
+                                        _ny, _nm = (_y + 1, 1) if _m == 12 else (_y, _m + 1)
+                                        return pd.Timestamp(f"{_ny}-{_nm:02d}-01", tz=_tzn) + pd.Timedelta(hours=_dshv)
+
+                                    # Only the trailing period can be in progress; loop
+                                    # defensively but never empty the report.
+                                    while len(df) > 1 and _win_end(str(df[_pcol].iloc[-1])) > _now:
+                                        _dropped = str(df[_pcol].iloc[-1])
+                                        df = df.iloc[:-1].copy()
+                                        logger.info(
+                                            "resolve_row_data: dropped in-progress trailing %s bucket %r (scheduled run)",
+                                            _pgran, _dropped,
+                                        )
+                        except Exception:
+                            logger.exception("resolve_row_data: open-period drop check failed (non-fatal)")
 
             elif strategy == "WINDOW_DIFF":
                 # Detect run intervals from cumulative counter changes.

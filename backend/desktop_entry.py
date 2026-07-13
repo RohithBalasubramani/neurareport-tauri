@@ -49,6 +49,44 @@ def _clean_stale_locks(data_dir: Path):
         print(f"[DESKTOP] Cleaned {cleaned} stale lock file(s) from previous session", flush=True)
 
 
+def _detect_system_tz():
+    """Best-effort IANA timezone name for the local machine (frozen-safe).
+
+    PyInstaller/frozen builds cannot reliably infer the local timezone via
+    datetime.astimezone() (it silently collapses to UTC), which would fire
+    scheduled reports at the wrong wall-clock time. Resolve the real OS
+    timezone name so NEURA_SCHEDULER_TZ can be pinned explicitly.
+    """
+    # 1. tzlocal is the canonical cross-OS resolver (may be absent in the bundle).
+    try:
+        from tzlocal import get_localzone_name  # type: ignore
+        name = get_localzone_name()
+        if name:
+            return name
+    except Exception:
+        pass
+    # 2. Linux/macOS: /etc/localtime is usually a symlink into the zoneinfo db.
+    try:
+        p = Path("/etc/localtime")
+        if p.is_symlink():
+            target = os.readlink(p)
+            if "zoneinfo/" in target:
+                return target.split("zoneinfo/", 1)[1]
+    except Exception:
+        pass
+    # 3. Linux: /etc/timezone holds the IANA name directly (Debian/Ubuntu).
+    try:
+        tzfile = Path("/etc/timezone")
+        if tzfile.exists():
+            name = tzfile.read_text(encoding="utf-8").strip()
+            if name:
+                return name
+    except Exception:
+        pass
+    # 4. Windows: tzlocal usually covers it; if not, let the app fall back.
+    return None
+
+
 def _seed_smtp_defaults(state_dir: Path):
     """Seed SMTP settings into the state store on first run."""
     import json
@@ -366,6 +404,17 @@ def main():
         "NEURA_DATABASE_URL",
         f"sqlite+aiosqlite:///{data_dir / 'state' / 'neurareport.db'}",
     )
+
+    # Pin the scheduler timezone so daily reports fire at the user's local
+    # wall-clock time. Frozen builds can't infer this reliably at runtime, so
+    # resolve the OS timezone explicitly here.
+    _tz = _detect_system_tz()
+    if _tz:
+        os.environ.setdefault("NEURA_SCHEDULER_TZ", _tz)
+        print(f"[DESKTOP] Scheduler timezone: {_tz}", flush=True)
+    # Surface empty/failed scheduled runs instead of silently sending nothing.
+    os.environ.setdefault("NEURA_MAIL_NOTIFY_ON_EMPTY", "true")
+    os.environ.setdefault("NEURA_MAIL_NOTIFY_ON_FAILURE", "true")
 
     # Seed default SMTP settings if not already configured
     _seed_smtp_defaults(data_dir / "state")

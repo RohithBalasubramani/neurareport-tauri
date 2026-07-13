@@ -242,6 +242,7 @@ def fill_and_print(
     KEY_VALUES: dict | None = None,
     __force_single: bool = False,
     BRAND_KIT_ID: str | None = None,
+    SCHEDULED: bool = False,
 ):
     """
     DB-driven renderer:
@@ -1454,6 +1455,7 @@ def fill_and_print(
         start_date=sql_params.get("start_date") or sql_params.get("from_date"),
         end_date=sql_params.get("end_date") or sql_params.get("to_date"),
         value_filters=df_value_filters,
+        scheduled=bool(SCHEDULED),
     )
     generator_results = pipeline.execute()
 

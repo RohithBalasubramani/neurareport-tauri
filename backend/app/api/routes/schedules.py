@@ -159,7 +159,10 @@ async def trigger_schedule(schedule_id: str, background_tasks: BackgroundTasks, 
         "batch_ids": schedule.get("batch_ids") or None,
         "key_values": schedule.get("key_values") or None,
         "docx": bool(schedule.get("docx")),
-        "xlsx": bool(schedule.get("xlsx")),
+        # Excel templates auto-produce + attach their .xlsx (natural output);
+        # pdf templates only when the schedule explicitly requests it.
+        "xlsx": bool(schedule.get("xlsx"))
+        or (str(schedule.get("template_kind") or "").strip().lower() == "excel"),
         "email_recipients": schedule.get("email_recipients") or None,
         "email_subject": schedule.get("email_subject") or f"[Manual Trigger] {schedule.get('name') or schedule.get('template_id')}",
         "email_message": schedule.get("email_message") or f"Manually triggered run for schedule '{schedule.get('name')}'.\nWindow: {dyn_start} - {dyn_end}.",

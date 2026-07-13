@@ -64,6 +64,28 @@ def _parse_iso(ts: str | None) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
+def _parse_local_iso(ts: str | None) -> datetime | None:
+    """Parse a schedule boundary date (start_date / end_date).
+
+    These come from the UI date picker as NAIVE local dates (e.g.
+    '2026-07-14 00:00:00'), meaning the user's LOCAL calendar day — not UTC.
+    Anchoring them to UTC shifts the window by the local offset (e.g. +5:30 in
+    IST), which can push the first daily fire to the NEXT day when run_time is
+    earlier than that offset — e.g. a 02:53 run whose Start Date is "the 14th"
+    would otherwise first fire on the 15th (00:00 UTC = 05:30 IST > 02:53 IST).
+    So naive boundaries are anchored to the scheduler's local timezone.
+    """
+    if not ts:
+        return None
+    try:
+        value = datetime.fromisoformat(ts)
+    except ValueError:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=_LOCAL_TZ)
+    return value.astimezone(_LOCAL_TZ)
+
+
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -282,10 +304,10 @@ class ReportScheduler:
             if schedule_id in self._inflight:
                 continue
 
-            start_date = _parse_iso(schedule.get("start_date"))
+            start_date = _parse_local_iso(schedule.get("start_date"))
             if start_date and now < start_date:
                 continue
-            end_date = _parse_iso(schedule.get("end_date"))
+            end_date = _parse_local_iso(schedule.get("end_date"))
             if end_date and now > end_date:
                 continue
 
@@ -318,8 +340,8 @@ class ReportScheduler:
                 continue
 
             interval_minutes = max(int(schedule.get("interval_minutes") or 0), 1)
-            start_date = _parse_iso(schedule.get("start_date"))
-            end_date = _parse_iso(schedule.get("end_date"))
+            start_date = _parse_local_iso(schedule.get("start_date"))
+            end_date = _parse_local_iso(schedule.get("end_date"))
             signature = _schedule_signature(schedule)
 
             job = self._scheduler.get_job(schedule_id)
@@ -372,6 +394,24 @@ class ReportScheduler:
         except Exception:
             pass
 
+    def _next_run_after_fire(self, schedule_id: str, schedule: dict, finished: datetime) -> str:
+        """Next-run to store for display after a run completes.
+
+        Prefer APScheduler's already-computed next fire time (correct cron/
+        interval wall-clock in _LOCAL_TZ) over the naive interval fallback.
+        Without this, a daily cron schedule would show "finished + interval"
+        as its Next Run after each run (e.g. 24h from the finish instant rather
+        than the actual next HH:MM), and _sync_from_store won't correct it while
+        the signature is unchanged.
+        """
+        try:
+            job = self._scheduler.get_job(schedule_id)
+            if job and job.next_run_time:
+                return job.next_run_time.astimezone(timezone.utc).isoformat()
+        except Exception:
+            pass
+        return _next_run_datetime(schedule, finished).isoformat()
+
     async def _run_schedule(self, schedule_id: str | dict, schedule_sig: str | None = None) -> None:
         schedule: dict | None
         if isinstance(schedule_id, dict):
@@ -398,7 +438,10 @@ class ReportScheduler:
                 "batch_ids": schedule.get("batch_ids") or None,
                 "key_values": schedule.get("key_values") or None,
                 "docx": bool(schedule.get("docx")),
-                "xlsx": bool(schedule.get("xlsx")),
+                # Excel templates auto-produce + attach their .xlsx (natural
+                # output); pdf templates only when the schedule requests it.
+                "xlsx": bool(schedule.get("xlsx"))
+                or (str(schedule.get("template_kind") or "").strip().lower() == "excel"),
                 "email_recipients": schedule.get("email_recipients") or None,
                 "email_subject": schedule.get("email_subject")
                 or f"[Scheduled] {schedule.get('template_name') or schedule.get('template_id')}",
@@ -453,7 +496,7 @@ class ReportScheduler:
                 result = await result
         except Exception as exc:
             finished = _now_utc()
-            next_run = _next_run_datetime(schedule, finished).isoformat()
+            next_run = self._next_run_after_fire(schedule_id, schedule, finished)
             state_store.record_schedule_run(
                 schedule_id,
                 started_at=started.isoformat(),
@@ -476,7 +519,7 @@ class ReportScheduler:
             _notify_schedule_failure(schedule, f"{type(exc).__name__}: {str(exc)[:400]}")
         else:
             finished = _now_utc()
-            next_run = _next_run_datetime(schedule, finished).isoformat()
+            next_run = self._next_run_after_fire(schedule_id, schedule, finished)
             artifacts = {
                 "html_url": result.get("html_url"),
                 "pdf_url": result.get("pdf_url"),

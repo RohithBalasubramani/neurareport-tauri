@@ -315,8 +315,10 @@ def _export_xlsx_with_spans_xlsxwriter(html_text: str, output_path: Path) -> Opt
         else:
             _render_preface(grid)
 
+    # Cap column width so long meter-header labels wrap instead of stretching the
+    # sheet (and any summary block that shares those columns) far too wide.
     for c_idx, n in col_text_len.items():
-        ws.set_column(c_idx, c_idx, min(60, max(10, n + 2)))
+        ws.set_column(c_idx, c_idx, min(18, max(9, n + 2)))
     if data_header_abs is not None:
         ws.freeze_panes(data_header_abs, 0)
 

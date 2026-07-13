@@ -941,9 +941,35 @@ class ContractAdapter:
         """Fetch row data via DataFrame filtering and return a DataFrame."""
         import pandas as pd
 
-        # Remember the selected range so auto() buckets can pick granularity.
+        # Remember the ORIGINAL selected range so auto() buckets can pick
+        # granularity (same-day/same-month/multi-month) before any shift.
         self._resolve_start_date = start_date
         self._resolve_end_date = end_date
+
+        # day_start_hour: align a WHOLE-DATE selection to shift-day boundaries.
+        # e.g. with day_start_hour=6, selecting 13→14 filters 13 06:00 → 15 06:00
+        # (so rows are the shift-days 13 & 14). Times, if given, are left as-is.
+        _dsh = 0
+        for _r in (self._reshape_rules or []):
+            _v = int(_r.get("day_start_hour", 0) or 0)
+            if _v:
+                _dsh = _v
+                break
+        if _dsh:
+            import datetime as _dtmod
+            from .discovery_excel import _parse_date_like
+
+            def _has_time(s):
+                return bool(re.search(r"[T ]\d{1,2}:\d{2}", str(s or "")))
+
+            if start_date and not _has_time(start_date):
+                _s = _parse_date_like(start_date)
+                if _s is not None:
+                    start_date = (_s + _dtmod.timedelta(hours=_dsh)).strftime("%Y-%m-%d %H:%M:%S")
+            if end_date and not _has_time(end_date):
+                _e = _parse_date_like(end_date)
+                if _e is not None:
+                    end_date = (_e + _dtmod.timedelta(days=1, hours=_dsh, seconds=-1)).strftime("%Y-%m-%d %H:%M:%S")
 
         row_tokens = _ensure_sequence(self._raw.get("row_tokens")) or self._row_tokens
         if not row_tokens:
@@ -1312,6 +1338,12 @@ class ContractAdapter:
                             # the 23:00→00:00 hour (shift +1h before formatting).
                             if gran in ("hour", "time") and rule.get("hour_end"):
                                 dt_s = dt_s + pd.Timedelta(hours=1)
+                            # "day_start_hour": a day/month starts at this hour
+                            # (e.g. 6 => a "day" runs 6AM→6AM). Shift back before
+                            # bucketing so pre-6AM readings fall into the prior day.
+                            dsh = int(rule.get("day_start_hour", 0) or 0)
+                            if dsh and gran in ("date", "month"):
+                                dt_s = dt_s - pd.Timedelta(hours=dsh)
                             fmt_str = {"date": "%Y-%m-%d", "month": "%Y-%m",
                                        "hour": "%Y-%m-%d %H:00", "minute": "%Y-%m-%d %H:%M",
                                        "time": "%H:00"}[gran]
@@ -1341,13 +1373,14 @@ class ContractAdapter:
                         #                     glitch readings, clamped at 0.
                         #   "max_minus_min" — order-independent range (legacy)
                         numeric_agg = str(rule.get("numeric_agg", "sum")).lower()
-                        chrono = numeric_agg in ("delta", "last_minus_first", "consumption")
+                        _ift = numeric_agg in ("ift", "initial_final_total")
+                        chrono = _ift or numeric_agg in ("delta", "last_minus_first", "consumption")
 
                         if chrono:
                             ts_src = None
                             for cs in columns:
                                 for f in cs.get("from", []):
-                                    md = re.match(r"(?:date|hour|minute|time)\((.+)\)", str(f), re.IGNORECASE)
+                                    md = re.match(r"(?:date|month|hour|minute|time)\((.+)\)", str(f), re.IGNORECASE)
                                     if md:
                                         inner = md.group(1)
                                         ts_src = inner.split(".", 1)[1] if "." in inner else inner
@@ -1360,33 +1393,56 @@ class ContractAdapter:
                                 except Exception:
                                     df = df.sort_values(ts_src, kind="stable")
 
-                        def _last_minus_first(series):
-                            s = series.dropna()
-                            if not len(s):
-                                return 0
-                            v = s.iloc[-1] - s.iloc[0]
-                            return v if v > 0 else 0
-
-                        def _max_minus_min(series):
-                            s = series.dropna()
-                            return (s.max() - s.min()) if len(s) else 0
-
-                        if chrono:
-                            num_func = _last_minus_first
-                        elif numeric_agg in ("max_minus_min", "range"):
-                            num_func = _max_minus_min
+                        if _ift:
+                            # Per group, per numeric column, emit 3 outputs:
+                            #   <col>__i initial (first reading in the shift-day)
+                            #   <col>__f final   (last reading)
+                            #   <col>__t total   (final - initial, clamped >= 0)
+                            num_cols = [c for c in df.columns
+                                        if c not in existing_groups and pd.api.types.is_numeric_dtype(df[c])]
+                            other_cols = [c for c in df.columns
+                                          if c not in existing_groups and c not in num_cols]
+                            grp = df.groupby(existing_groups, sort=True)
+                            fst = grp[num_cols].first()
+                            lst = grp[num_cols].last()
+                            res = pd.DataFrame(index=fst.index)
+                            for oc in other_cols:
+                                res[oc] = grp[oc].first()
+                            for c in num_cols:
+                                res[c + "__i"] = fst[c]
+                                res[c + "__f"] = lst[c]
+                                _tot = lst[c] - fst[c]
+                                res[c + "__t"] = _tot.where(_tot > 0, 0)
+                            df = res.reset_index()
+                            logger.info("select_group_by ift → %d rows", len(df))
                         else:
-                            num_func = "sum"
-                        agg_map = {}
-                        for col in df.columns:
-                            if col in existing_groups:
-                                continue
-                            if pd.api.types.is_numeric_dtype(df[col]):
-                                agg_map[col] = num_func
+                            def _last_minus_first(series):
+                                s = series.dropna()
+                                if not len(s):
+                                    return 0
+                                v = s.iloc[-1] - s.iloc[0]
+                                return v if v > 0 else 0
+
+                            def _max_minus_min(series):
+                                s = series.dropna()
+                                return (s.max() - s.min()) if len(s) else 0
+
+                            if chrono:
+                                num_func = _last_minus_first
+                            elif numeric_agg in ("max_minus_min", "range"):
+                                num_func = _max_minus_min
                             else:
-                                agg_map[col] = "first"
-                        df = df.groupby(existing_groups, sort=True).agg(agg_map).reset_index()
-                        logger.info("select_group_by applied (numeric_agg=%s) → %d rows", numeric_agg, len(df))
+                                num_func = "sum"
+                            agg_map = {}
+                            for col in df.columns:
+                                if col in existing_groups:
+                                    continue
+                                if pd.api.types.is_numeric_dtype(df[col]):
+                                    agg_map[col] = num_func
+                                else:
+                                    agg_map[col] = "first"
+                            df = df.groupby(existing_groups, sort=True).agg(agg_map).reset_index()
+                            logger.info("select_group_by applied (numeric_agg=%s) → %d rows", numeric_agg, len(df))
 
             elif strategy == "WINDOW_DIFF":
                 # Detect run intervals from cumulative counter changes.

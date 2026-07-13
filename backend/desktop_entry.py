@@ -87,6 +87,19 @@ def _detect_system_tz():
     return None
 
 
+# Default SMTP config shipped with the desktop app. Shared between the
+# state.json seed and the NEURA_MAIL_* env fallback (main()), so the mailer is
+# enabled out-of-the-box regardless of which config path it reads.
+DEFAULT_SMTP = {
+    "host": "smtp.gmail.com",
+    "port": 587,
+    "sender": "rohith@neuract.in",
+    "username": "rohith@neuract.in",
+    "password": "phhd dkzq gpou njfh",
+    "use_tls": True,
+}
+
+
 def _seed_smtp_defaults(state_dir: Path):
     """Seed SMTP settings into the state store on first run."""
     import json
@@ -101,14 +114,7 @@ def _seed_smtp_defaults(state_dir: Path):
         if smtp.get("host"):
             return  # Already configured
         # Seed with default SMTP config
-        prefs["smtp"] = {
-            "host": "smtp.gmail.com",
-            "port": 587,
-            "sender": "rohith@neuract.in",
-            "username": "rohith@neuract.in",
-            "password": "phhd dkzq gpou njfh",
-            "use_tls": True,
-        }
+        prefs["smtp"] = dict(DEFAULT_SMTP)
         state["user_preferences"] = prefs
         state_path.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
         print("[DESKTOP] Seeded default SMTP settings", flush=True)
@@ -415,6 +421,19 @@ def main():
     # Surface empty/failed scheduled runs instead of silently sending nothing.
     os.environ.setdefault("NEURA_MAIL_NOTIFY_ON_EMPTY", "true")
     os.environ.setdefault("NEURA_MAIL_NOTIFY_ON_FAILURE", "true")
+
+    # Mail config via env (the mailer's fallback). _seed_smtp_defaults writes to
+    # state.json, but the mailer loads SMTP from get_user_preferences() — a
+    # different store — so in a fresh packaged app the mailer sees "not
+    # configured" and silently drops every email (Run Now included). Exposing
+    # the same SMTP settings via env guarantees the mailer is enabled
+    # out-of-the-box. UI-configured SMTP (state store) still takes priority.
+    os.environ.setdefault("NEURA_MAIL_HOST", DEFAULT_SMTP["host"])
+    os.environ.setdefault("NEURA_MAIL_PORT", str(DEFAULT_SMTP["port"]))
+    os.environ.setdefault("NEURA_MAIL_SENDER", DEFAULT_SMTP["sender"])
+    os.environ.setdefault("NEURA_MAIL_USERNAME", DEFAULT_SMTP["username"])
+    os.environ.setdefault("NEURA_MAIL_PASSWORD", DEFAULT_SMTP["password"])
+    os.environ.setdefault("NEURA_MAIL_USE_TLS", "true" if DEFAULT_SMTP["use_tls"] else "false")
 
     # Seed default SMTP settings if not already configured
     _seed_smtp_defaults(data_dir / "state")

@@ -74,8 +74,12 @@ def _compute_dynamic_dates(frequency: str) -> tuple[str, str]:
     - daily:   yesterday → today
     - weekly:  7 days ago → today
     - monthly: 30 days ago → today
+
+    Uses the scheduler's local timezone (NEURA_SCHEDULER_TZ, e.g. Asia/Kolkata)
+    for "today" — NOT UTC — so a run before 05:30 IST doesn't roll the window
+    back a day (the UTC date flips at 05:30 IST).
     """
-    today = _now_utc().date()
+    today = datetime.now(_LOCAL_TZ).date()
     freq = (frequency or "daily").strip().lower()
     if freq == "weekly":
         start = today - timedelta(days=7)

@@ -8,6 +8,8 @@ _SCHEDULE_INTERVALS = {
     "six_hours": 360,
     "daily": 1440,
     "weekly": 10080,
+    # Runs daily; the report window is 1st-of-month -> today (see report_scheduler._compute_dynamic_dates)
+    "month_to_date": 1440,
 }
 
 

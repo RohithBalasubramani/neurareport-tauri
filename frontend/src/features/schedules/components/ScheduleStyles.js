@@ -209,12 +209,14 @@ export const FREQUENCY_OPTIONS = [
   { value: 'daily', label: 'Daily' },
   { value: 'weekly', label: 'Weekly' },
   { value: 'monthly', label: 'Monthly' },
+  { value: 'month_to_date', label: 'Daily — Month to date (1st → today, cumulative)' },
 ]
 
 export const FREQUENCY_INTERVALS = {
   daily: 1440,
   weekly: 10080,
   monthly: 43200,
+  month_to_date: 1440,
 }
 
 // =============================================================================

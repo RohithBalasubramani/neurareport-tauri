@@ -145,7 +145,7 @@ async def trigger_schedule(schedule_id: str, background_tasks: BackgroundTasks, 
         scheduler_runner,
     )
 
-    # Dynamic date range based on frequency (daily=yesterday→today, weekly=7d, monthly=30d)
+    # Dynamic date range based on frequency (daily=yesterday→today, weekly=7d, monthly=30d, month_to_date=1st→today)
     from backend.app.services.jobs.report_scheduler import _compute_dynamic_dates
     frequency = str(schedule.get("frequency") or "daily").strip().lower()
     dyn_start, dyn_end = _compute_dynamic_dates(frequency)

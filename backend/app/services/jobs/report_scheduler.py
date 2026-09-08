@@ -93,9 +93,11 @@ def _now_utc() -> datetime:
 def _compute_dynamic_dates(frequency: str) -> tuple[str, str]:
     """Compute dynamic start/end date strings based on schedule frequency.
 
-    - daily:   yesterday → today
-    - weekly:  7 days ago → today
-    - monthly: 30 days ago → today
+    - daily:         yesterday → today
+    - weekly:        7 days ago → today
+    - monthly:       30 days ago → today
+    - month_to_date: 1st of the current month → today (runs daily; the report
+                     accumulates day-wise rows through the month — "cumulative")
 
     Uses the scheduler's local timezone (NEURA_SCHEDULER_TZ, e.g. Asia/Kolkata)
     for "today" — NOT UTC — so a run before 05:30 IST doesn't roll the window
@@ -107,6 +109,8 @@ def _compute_dynamic_dates(frequency: str) -> tuple[str, str]:
         start = today - timedelta(days=7)
     elif freq == "monthly":
         start = today - timedelta(days=30)
+    elif freq == "month_to_date":
+        start = today.replace(day=1)
     else:  # daily (default)
         start = today - timedelta(days=1)
     return start.isoformat(), today.isoformat()
@@ -214,7 +218,7 @@ def _build_cron_trigger(
         kwargs["day_of_week"] = "mon"
     elif frequency == "monthly":
         kwargs["day"] = 1
-    # daily (default): runs every day at the specified time — no extra args needed
+    # daily / month_to_date (default): run every day at the specified time — no extra args needed
 
     return CronTrigger(**kwargs)
 
@@ -426,7 +430,7 @@ class ReportScheduler:
         correlation_id = f"sched-{schedule_id or 'job'}-{started.timestamp():.0f}"
         job_tracker: JobRunTracker | None = None
         try:
-            # Dynamic date range based on frequency (daily=yesterday→today, weekly=7d, monthly=30d)
+            # Dynamic date range based on frequency (daily=yesterday→today, weekly=7d, monthly=30d, month_to_date=1st→today)
             frequency = str(schedule.get("frequency") or "daily").strip().lower()
             dyn_start, dyn_end = _compute_dynamic_dates(frequency)
 

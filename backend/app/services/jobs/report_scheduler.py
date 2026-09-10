@@ -97,7 +97,9 @@ def _compute_dynamic_dates(frequency: str) -> tuple[str, str]:
     - weekly:        7 days ago → today
     - monthly:       30 days ago → today
     - month_to_date: 1st of the current month → today (runs daily; the report
-                     accumulates day-wise rows through the month — "cumulative")
+                     accumulates day-wise rows through the month — "cumulative").
+                     On the 1st: previous month 1st → last day (the month-end
+                     final), so the last day of every month is delivered.
 
     Uses the scheduler's local timezone (NEURA_SCHEDULER_TZ, e.g. Asia/Kolkata)
     for "today" — NOT UTC — so a run before 05:30 IST doesn't roll the window
@@ -110,6 +112,14 @@ def _compute_dynamic_dates(frequency: str) -> tuple[str, str]:
     elif freq == "monthly":
         start = today - timedelta(days=30)
     elif freq == "month_to_date":
+        if today.day == 1:
+            # Month boundary: nothing of the new month is complete yet, and the
+            # previous month's LAST day only became complete this morning (its
+            # 6->6 shift-day ends at 06:00 today). So the run on the 1st sends
+            # the previous month's FINAL report (1st..last day), and the
+            # accumulation restarts on the 2nd with the new month's 1st.
+            last_prev = today - timedelta(days=1)
+            return last_prev.replace(day=1).isoformat(), last_prev.isoformat()
         start = today.replace(day=1)
     else:  # daily (default)
         start = today - timedelta(days=1)

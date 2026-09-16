@@ -93,9 +93,9 @@ def _detect_system_tz():
 DEFAULT_SMTP = {
     "host": "smtp.gmail.com",
     "port": 587,
-    "sender": "rohith@neuract.in",
-    "username": "rohith@neuract.in",
-    "password": "phhd dkzq gpou njfh",
+    "sender": "support@neuract.in",
+    "username": "support@neuract.in",
+    "password": "tvwg xmwq mfte vakj",
     "use_tls": True,
 }
 
